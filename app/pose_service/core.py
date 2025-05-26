@@ -18,7 +18,6 @@ class PoseService:
 
     def _init_models(self):
         """Initialize detection and pose estimation models."""
-        print("Initializing detector...")
         print(settings.DETECTOR_CONFIG)
         self.detector = init_detector(
             settings.DETECTOR_CONFIG,
@@ -27,7 +26,6 @@ class PoseService:
         )
         self.detector.cfg = adapt_mmdet_pipeline(self.detector.cfg)
 
-        print("Initializing pose model...")
         self.pose_estimator = init_pose_estimator(
             settings.POSE_CONFIG,
             settings.POSE_CHECKPOINT,
@@ -96,15 +94,12 @@ class PoseService:
             tuple: (visualization image, pose results)
         """
         # 1. Person detection
-        print("Starting person detection...")
+
         det_result = inference_detector(self.detector, image)
         pred_instance = det_result.pred_instances.cpu().numpy()
 
         if pred_instance is None or len(pred_instance) == 0:
-            print("No person detected.")
             return image, None
-
-        print(f"Detected {len(pred_instance)} instances")
 
         # Filter detections based on category ID and score threshold
         bboxes = np.concatenate(
@@ -113,19 +108,14 @@ class PoseService:
                                        pred_instance.scores > settings.bbox_thr)]
         bboxes = bboxes[nms(bboxes, settings.nms_thr), :4]
 
-        print(f"Filtered bboxes shape: {bboxes.shape}")
-
         if len(bboxes) == 0:
-            print("No valid person bboxes after filtering.")
             return image, None
 
         # 2. Pose estimation
-        print("Starting pose estimation...")
         pose_results = inference_topdown(self.pose_estimator, image, bboxes)
         data_samples = merge_data_samples(pose_results)
 
         # 3. 尝试使用官方可视化器
-        print("Attempting official visualization...")
         # Method 1: Use add_datasample
         self.visualizer.add_datasample(
             'result',
@@ -144,15 +134,14 @@ class PoseService:
         vis_img = self.visualizer.get_image()
 
         if vis_img is not None and not np.array_equal(vis_img, image):
-            print("Official visualization successful")
+
             return vis_img, pose_results
         else:
-            print("Official visualization failed or returned original image")
+            print("Visualization failed with official visualizer, falling back to manual drawing...")
 
         # Fallback: manual drawing
-        print("Using manual drawing as fallback...")
+
         vis_img = self._draw_poses_manually(image, pose_results)
-        print("Manual drawing successful")
         return vis_img, pose_results
         # Create a singleton instance
 
