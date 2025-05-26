@@ -1,21 +1,22 @@
-import io
+from io import BytesIO
 
-from PIL import Image
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from fastapi.responses import Response
+import cv2
+import numpy as np
+from fastapi import APIRouter, UploadFile, File
+from fastapi.responses import StreamingResponse
+
+from app.pose_service.core import pose_service
 
 router = APIRouter()
 
 
-# pose_detector = PoseDetector()
-
-@router.post("/predict_heatmaps",
-             summary="Predict human heatmaps from image",
+@router.post("/predict_pose",
+             summary="Predict human pose from image",
              description="""
-    Predict human heatmaps from an uploaded image using MMPose.
+    Predict human pose from an uploaded image using MMPose.
     
     - **image**: Upload an image file (jpg, png) containing a person
-    - Returns processed image with heatmaps
+    - Returns processed image with pose visualization
     """,
              responses={
                  200: {
@@ -36,43 +37,30 @@ router = APIRouter()
                  }
              }
              )
-async def predict_heatmaps_endpoint(
+async def predict_pose_endpoint(
         image: UploadFile = File(
             ...,
             description="Upload an image file (jpg, png) containing a person",
             example="person.jpg"
         )
-) -> Response:
+) -> StreamingResponse:
     """
-    Predict human heatmaps from an uploaded image.
+    Predict human pose from an uploaded image.
     
     Args:
         image: Image file containing a person
         
     Returns:
-        Response: Processed image with heatmaps
+        StreamingResponse: Processed image with pose visualization
     """
-    # Check if the uploaded file is an image
-    if not image.content_type.startswith('image/'):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file format. Please upload an image file."
-        )
+    # Read image from upload
+    data = await image.read()
+    np_arr = np.frombuffer(data, np.uint8)
+    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-    # Read the image
-    image_data = await image.read()
-
-    # Convert to PIL Image for processing
-    input_image = Image.open(io.BytesIO(image_data))
-
-    # Get visualization
-    # output_image = await pose_detector.get_visualization(input_image)
-
-    # Convert to bytes
-    output_image = input_image
-    output = io.BytesIO()
-    output_image.save(output, format='JPEG')
-    output.seek(0)
-
-    # Return the image directly as a response
-    return Response(content=output.getvalue(), media_type="image/jpeg")
+    # Process image through pose service
+    vis_img, pose_results = pose_service.process_image(img)
+    # Encode to JPEG and return
+    _, jpeg = cv2.imencode('.jpg', vis_img)
+    buf = BytesIO(jpeg.tobytes())
+    return StreamingResponse(buf, media_type='image/jpeg')
