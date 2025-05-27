@@ -140,7 +140,7 @@ async def offer(request: Request):
             pc._player = player
 
             if player.video:
-                transformed = VideoTransformTrack(player.video, enable_skip=True)
+                transformed = VideoTransformTrack(player.video)
                 pc.addTrack(transformed)
                 logger.info("Video track added using MediaPlayer")
                 await pc.setRemoteDescription(offers)

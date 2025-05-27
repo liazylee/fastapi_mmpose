@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from typing import ClassVar
 
 import torch
@@ -27,8 +28,8 @@ class Settings(BaseSettings):
     ALPHA: float = 0.8
     LINE_WIDTH: int = 1
     det_cat_id: int = 0  # Category ID for person detection
-    bbox_thr: float = 0.3  # Threshold for bounding box confidence
-    nms_thr: float = 0.3  # IoU threshold for NMS
+    bbox_thr: float = 0.4  # Threshold for bounding box confidence
+    nms_thr: float = 0.4  # IoU threshold for NMS
     FPS: int = 30  # Default FPS for video processing
     WORKERS: int = os.cpu_count() or 4  # Number of CPU workers
 
@@ -36,4 +37,30 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
-settings = Settings()
+@dataclass
+class BatchProcessingConfig:
+    device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    # Batch settings
+    batch_size: int = 482
+    max_queue_size: int = 50
+    batch_timeout_ms: int = 1  # Max wait time to form batch
+
+    # Threading settings
+    num_workers: int = os.cpu_count() or 4  # Separate threads for different stages
+    gpu_streams: int = 40  # CUDA streams for parallel processing
+
+    # Performance settings
+    prefetch_factor: int = 20
+    pin_memory: bool = True
+    non_blocking: bool = True
+
+    # Model settings
+    enable_tensorrt: bool = False  # Toggle for future TensorRT
+    input_resolution: tuple = (1920, 1080)  # Input resolution for video processing
+    detection_batch_size: int = 16  # Can differ from pose batch size
+    pose_batch_size: int = 10
+
+
+batch_settings: BatchProcessingConfig = BatchProcessingConfig()
+
+settings: Settings = Settings()
