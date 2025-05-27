@@ -121,8 +121,6 @@ class PoseService:
         pose_results = inference_topdown(self.pose_estimator, image, bboxes)
 
         data_samples = merge_data_samples(pose_results)
-
-        # 3. 尝试使用官方可视化器
         # Method 1: Use add_datasample
 
         start_time = time.time()
