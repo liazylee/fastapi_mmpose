@@ -136,11 +136,7 @@ async def offer(request: Request):
         if not file_path.exists():
             return JSONResponse(status_code=400, content={"detail": "File not found"})
         try:
-            options = {
-                'video_size': '1280x720',
-                'framerate': '30',
-            }
-            player = MediaPlayer(str(file_path), options=options)
+            player = MediaPlayer(str(file_path))
             pc._player = player
 
             if player.video:
