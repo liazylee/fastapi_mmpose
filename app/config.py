@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     det_cat_id: int = 0  # Category ID for person detection
     bbox_thr: float = 0.3  # Threshold for bounding box confidence
     nms_thr: float = 0.3  # IoU threshold for NMS
+    FPS: int = 30  # Default FPS for video processing
+    WORKERS: int = os.cpu_count() or 4  # Number of CPU workers
 
     class Config:
         case_sensitive = True

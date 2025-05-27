@@ -1,13 +1,16 @@
+import time  # noqa
+
 import cv2
 import numpy as np
 from mmdet.apis import init_detector, inference_detector
 from mmpose.apis import (inference_topdown, init_model as init_pose_estimator)
 from mmpose.evaluation.functional import nms
 from mmpose.registry import VISUALIZERS
-from mmpose.structures import merge_data_samples
+from mmpose.structures import merge_data_samples  # noqa
 from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import settings
+from app.video_service.helper import timeit
 
 
 class PoseService:
@@ -83,6 +86,7 @@ class PoseService:
 
         return vis_img
 
+    @timeit
     def process_image(self, image):
         """
         Process a single image through detection and pose estimation pipeline.
@@ -96,6 +100,7 @@ class PoseService:
         # 1. Person detection
 
         det_result = inference_detector(self.detector, image)
+
         pred_instance = det_result.pred_instances.cpu().numpy()
 
         if pred_instance is None or len(pred_instance) == 0:
@@ -112,11 +117,29 @@ class PoseService:
             return image, None
 
         # 2. Pose estimation
+
         pose_results = inference_topdown(self.pose_estimator, image, bboxes)
+
         data_samples = merge_data_samples(pose_results)
 
         # 3. 尝试使用官方可视化器
         # Method 1: Use add_datasample
+
+        start_time = time.time()
+        # for pose_result in pose_results:
+        #     self.visualizer.add_datasample(
+        #         'result',
+        #         image,
+        #         data_sample=pose_result,
+        #         draw_gt=False,
+        #         draw_bbox=True,
+        #         draw_heatmap=False,
+        #         skeleton_style='mmpose',
+        #         wait_time=0,
+        #         kpt_thr=0.3,
+        #         show=False,
+        #     )
+
         self.visualizer.add_datasample(
             'result',
             image,
@@ -130,7 +153,8 @@ class PoseService:
             wait_time=0,
             kpt_thr=0.3
         )
-
+        end_time = time.time()
+        print(f"Function  executed in {end_time - start_time:.4f} seconds")
         vis_img = self.visualizer.get_image()
 
         if vis_img is not None and not np.array_equal(vis_img, image):

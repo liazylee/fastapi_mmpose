@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.contrib.media import MediaPlayer
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,6 +19,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+from fastapi.staticfiles import StaticFiles
+
+UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+STATIC_DIR = BASE_DIR / "static"
+if not STATIC_DIR.exists():
+    STATIC_DIR.mkdir(parents=True)
 app = FastAPI(
     title=settings.APP_NAME,
     description="FastAPI application for MMPose integration",
@@ -34,6 +44,13 @@ app.add_middleware(
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
+# 挂载 uploads 路由
+app.mount(
+    "/uploads",
+    StaticFiles(directory=os.path.join("app", "uploads")),
+    name="uploads"
+)
+app.mount('/static', StaticFiles(directory=str(BASE_DIR / "static")), name='static')
 
 
 @app.post("/upload")
@@ -44,7 +61,7 @@ async def upload_file(request: Request):
         return JSONResponse(status_code=400, content={"detail": "No file uploaded"})
     if not file.filename.endswith(('.mp4', '.webm', '.ogg', '.mov', '.avi')):
         return JSONResponse(status_code=400, content={"detail": "Unsupported file type"})
-    file_location = f"uploads/{file.filename}"
+    file_location = f"{UPLOAD_DIR}/{file.filename}"
     with open(file_location, "wb") as f:
         content = await file.read()
         f.write(content)
@@ -52,12 +69,30 @@ async def upload_file(request: Request):
     return {"filename": file.filename, "location": file_location}
 
 
+@app.get("/uploads")
+async def list_uploads():
+    files = []
+    for f in UPLOAD_DIR.iterdir():
+        if f.is_file():
+            files.append({"filename": f.name, "size": f.stat().st_size})
+    return {"files": files}
+
+
+@app.delete("/uploads/{filename}")
+async def delete_upload(filename: str):
+    file_path = UPLOAD_DIR / filename
+    if file_path.exists():
+        file_path.unlink()
+        return {"detail": "Deleted"}
+    return JSONResponse(status_code=404, content={"detail": "File not found"})
+
+
 @app.post("/offer")
 async def offer(request: Request):
-    logger.info(f"Received offer request: {request}")
+    logger.info(f"Received offer request")
     data = await request.json()
-    offer = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
-
+    offers = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
+    mode = data.get("mode", "camera")
     pc = RTCPeerConnection()
     pcs.add(pc)
 
@@ -65,7 +100,12 @@ async def offer(request: Request):
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
         logger.info(f"Connection state is {pc.connectionState}")
-        if pc.connectionState == "failed":
+        if pc.connectionState == "failed" or pc.connectionState == "closed":
+            # 清理 MediaPlayer 资源
+            if hasattr(pc, "_player") and pc._player:
+                logger.info("Closing MediaPlayer")
+                await pc._player.close()
+                del pc._player
             await pc.close()
             pcs.discard(pc)
 
@@ -74,33 +114,74 @@ async def offer(request: Request):
     async def on_iceconnectionstatechange():
         logger.info(f"ICE connection state is {pc.iceConnectionState}")
 
-    # Handle incoming tracks
-    @pc.on("track")
-    def on_track(track):
-        logger.info(f"Track {track.kind} received")
-        if track.kind == "video":
-            # Wrap incoming track with our transform
-            transformed = VideoTransformTrack(track)
-            pc.addTrack(transformed)
-            logger.info("Video track transformed and added")
-        # audio can be blackholed
-        elif track.kind == "audio":
-            pc.addTrack(track)
-            logger.info("Audio track added")
+    # 先设置远程描述
 
-    # Set remote offer
-    await pc.setRemoteDescription(offer)
-    logger.info("Remote description set")
+    # Handle different modes
+    if mode == "camera":
+        @pc.on("track")
+        def on_track(track):
+            logger.info(f"Track {track.kind} received")
+            if track.kind == "video":
+                transformed = VideoTransformTrack(track)
+                pc.addTrack(transformed)
+                logger.info("Video track transformed and added")
 
-    # Create answer
+        await pc.setRemoteDescription(offers)
+    elif mode == "upload":
+        filename = data.get("fileName")
+        if not filename:
+            return JSONResponse(status_code=400, content={"detail": "No fileName provided"})
+
+        file_path = UPLOAD_DIR / filename
+        if not file_path.exists():
+            return JSONResponse(status_code=400, content={"detail": "File not found"})
+        try:
+            options = {
+                'video_size': '1280x720',
+                'framerate': '30',
+            }
+            player = MediaPlayer(str(file_path), options=options)
+            pc._player = player
+
+            if player.video:
+                transformed = VideoTransformTrack(player.video, enable_skip=True)
+                pc.addTrack(transformed)
+                logger.info("Video track added using MediaPlayer")
+                await pc.setRemoteDescription(offers)
+            else:
+                return JSONResponse(status_code=400, content={"detail": "No video track in file"})
+
+        except Exception as e:
+            logger.error(f"Failed to open video file: {e}")
+            return JSONResponse(status_code=400, content={"detail": f"Cannot open video file: {str(e)}"})
+
+    elif mode == "stream":
+        stream_url = data.get("streamUrl")
+        if not stream_url:
+            return JSONResponse(status_code=400, content={"detail": "No streamUrl provided"})
+
+        try:
+            player = MediaPlayer(stream_url, format="ffmpeg", options={"rtsp_transport": "tcp"})
+            pc._player = player  # 保存引用以便清理
+            await pc.setRemoteDescription(offers)
+            if player.video:
+                transformed = VideoTransformTrack(player.video)
+                pc.addTrack(transformed)
+                logger.info("Video track from stream added")
+            else:
+                return JSONResponse(status_code=400, content={"detail": "No video track in stream"})
+        except Exception as e:
+            logger.error(f"Failed to open stream: {e}")
+            return JSONResponse(status_code=400, content={"detail": f"Cannot open stream: {str(e)}"})
+
+    else:
+        return JSONResponse(status_code=400, content={"detail": f"Unknown mode {mode}"})
+
+    # 创建并发送 answer
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
     logger.info("Answer created and local description set")
-
-    return JSONResponse({
-        "sdp": pc.localDescription.sdp,
-        "type": pc.localDescription.type
-    })
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
 
 
 @app.get("/")

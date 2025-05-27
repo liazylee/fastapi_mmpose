@@ -2,75 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebRTC Video Dashboard</title>
-    <style>
-        * {
-            box-sizing: border-box;
-        }
+    <title> Video Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
 
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-
-        header {
-            padding: 1rem;
-            background-color: #2c3e50;
-            color: white;
-            text-align: center;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: 1fr 1fr;
-            flex: 1;
-            gap: 1rem;
-            padding: 1rem;
-        }
-
-        .section {
-            border: 1px solid #ccc;
-            padding: 1rem;
-            background-color: #f9f9f9;
-            overflow: auto;
-            display: flex;
-            flex-direction: column;
-        }
-
-        video {
-            flex: 1;
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            border: 1px solid #ccc;
-            background: #000;
-        }
-
-        .status {
-            padding: 0.5rem;
-            margin-top: 0.5rem;
-            font-size: 0.9rem;
-            color: #555;
-        }
-
-        .controls {
-            margin: 1rem 0;
-        }
-
-        .controls select, .controls input[type=file], .controls button {
-            margin-right: 10px;
-            padding: 0.4rem;
-        }
-    </style>
 </head>
 <body>
 <header>
-    <h2>WebRTC Video Dashboard</h2>
+    <h2>Video Dashboard with MMPose</h2>
 </header>
 
 <div class="grid">
@@ -83,143 +21,75 @@
                 <option value="stream">Stream from URL</option>
                 <option value="upload">Upload Video File</option>
             </select>
-            <input type="text" id="streamUrl" placeholder="Stream URL" style="display:none;">
-            <input type="file" id="videoFile" accept="video/*" style="display:none;">
-            <button onclick="startConnection()">Start</button>
-            <button onclick="stopConnection()">Stop</button>
+
+            <!-- Stream URL input -->
+            <div id="streamControls" class="hidden">
+                <input type="text" id="streamUrl" placeholder="Enter stream URL (e.g., rtmp://... or http://...)"
+                       style="width: 100%;">
+                <div class="upload-info">Supports RTMP, HTTP, RTSP streams</div>
+            </div>
+
+            <!-- File upload controls -->
+            <div id="uploadControls" class="hidden">
+                <input type="file" id="videoFile" accept="video/*" onchange="onFileSelected()">
+                <button onclick="uploadFile()" class="btn-primary" id="uploadBtn" disabled>Upload File</button>
+                <div class="progress hidden" id="uploadProgress">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+                <div class="upload-info">Supported formats: MP4, WebM, AVI, MOV, MKV</div>
+
+                <!-- Uploaded files list -->
+                <div id="fileListContainer" class="hidden">
+                    <h4>Uploaded Files:</h4>
+                    <div class="file-list" id="fileList"></div>
+                    <button onclick="refreshFileList()" class="btn-primary" style="margin-top: 10px;">Refresh List
+                    </button>
+                </div>
+            </div>
+
+            <div style="margin-top: 15px;">
+                <button onclick="startConnection()" class="btn-primary">Start Processing</button>
+                <button onclick="stopConnection()" class="btn-danger">Stop</button>
+            </div>
         </div>
+
         <div class="status" id="status">Ready to start...</div>
         <video id="local" autoplay playsinline muted></video>
     </div>
 
     <!-- Section 2: Remote Stream -->
     <div class="section">
-        <h3>🎥 Remote Processed Stream</h3>
+        <h3>🎥 Processed Stream (MMPose Output)</h3>
         <video id="remote" autoplay playsinline></video>
     </div>
 
-    <!-- Section 3: Graph / Tracking Visualization -->
+    <!-- Section 3: File Management -->
     <div class="section">
-        <h3>📈 Real-Time Graph (Coming Soon)</h3>
-        <div id="chart" style="width: 100%; height: 100%; text-align:center; padding-top:40%; color: #aaa;">
-            [ Graph Placeholder ]
+        <h3>📁 File Management</h3>
+        <div id="fileManager">
+            <button onclick="refreshFileList()" class="btn-primary">Refresh File List</button>
+            <div class="file-list" id="allFilesList" style="margin-top: 10px;">
+                <div style="text-align: center; color: #666; padding: 20px;">
+                    Click "Refresh File List" to see uploaded files
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- Section 4: Empty (reserved) -->
+    <!-- Section 4: System Info -->
     <div class="section">
-        <h3>🔧 Reserved Area</h3>
-        <p style="text-align:center; color:#aaa;">[ Empty for future features ]</p>
+        <h3>📊 System Information</h3>
+        <div id="systemInfo">
+            <div>Status: <span id="connectionStatus">Disconnected</span></div>
+            <div>Mode: <span id="currentMode">None</span></div>
+            <div>Source: <span id="currentSource">None</span></div>
+            <div style="margin-top: 10px;">
+                <button onclick="checkHealth()" class="btn-primary">Check Health</button>
+            </div>
+        </div>
     </div>
 </div>
 
-<script>
-    let pc;
-    let localStream;
-    const local = document.getElementById('local');
-    const remote = document.getElementById('remote');
-    const status = document.getElementById('status');
-
-    function updateStatus(message) {
-        status.textContent = message;
-        console.log(message);
-    }
-
-    function onInputModeChange() {
-        const mode = document.getElementById('inputMode').value;
-        document.getElementById('streamUrl').style.display = mode === 'stream' ? 'inline' : 'none';
-        document.getElementById('videoFile').style.display = mode === 'upload' ? 'inline' : 'none';
-    }
-
-    async function startConnection() {
-        try {
-            updateStatus('Initializing connection...');
-
-            const mode = document.getElementById('inputMode').value;
-
-            if (pc) {
-                pc.close();
-                pc = null;
-            }
-            if (mode === 'camera') {
-                localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: false});
-                local.srcObject = localStream;
-            } else if (mode === 'upload') {
-                const file = document.getElementById('videoFile').files[0];
-                if (file) {
-                    const fileURL = URL.createObjectURL(file);
-                    local.src = fileURL;
-                    local.load();
-                    local.play();
-                }
-                return;
-            } else if (mode === 'stream') {
-                const url = document.getElementById('streamUrl').value;
-                if (url) {
-                    local.src = url;
-                    local.load();
-                    local.play();
-                }
-                return;
-            }
-
-            pc = new RTCPeerConnection({
-                iceServers: [
-                    {urls: 'stun:stun.l.google.com:19302'},
-                    {urls: 'stun:stun1.l.google.com:19302'}
-                ]
-            });
-
-            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-            pc.ontrack = (event) => {
-                if (event.streams[0]) {
-                    remote.srcObject = event.streams[0];
-                }
-            };
-
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-
-            const payload = {
-                sdp: pc.localDescription.sdp,
-                type: pc.localDescription.type,
-                mode: mode,
-
-            };
-            if (mode === 'upload') {
-                payload.fileName = document.getElementById('videoFile').files[0].name;
-            } else if (mode === 'stream') {
-                payload.streamUrl = document.getElementById('streamUrl').value;
-            }
-            const res = await fetch('/offer', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(payload)
-            });
-            const answer = await res.json();
-
-            if (answer.error) {
-                updateStatus('Server error: ' + answer.error);
-                return;
-            }
-
-            // —— 5) Finally set the answer ——
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-            updateStatus('WebRTC connection established');
-        } catch (err) {
-            updateStatus('Error: ' + err.message);
-            console.error(err);
-        }
-    }
-
-    function stopConnection() {
-        if (pc) pc.close();
-        if (localStream) localStream.getTracks().forEach(t => t.stop());
-        local.srcObject = null;
-        remote.srcObject = null;
-        updateStatus('Connection stopped');
-    }
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>
