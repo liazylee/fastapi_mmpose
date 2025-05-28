@@ -41,9 +41,9 @@ class Settings(BaseSettings):
 class BatchProcessingConfig:
     device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     # Batch settings
-    batch_size: int = 482
+    batch_size: int = 16
     max_queue_size: int = 50
-    batch_timeout_ms: int = 1  # Max wait time to form batch
+    batch_timeout_ms: int = 2  # Max wait time to form batch
 
     # Threading settings
     num_workers: int = os.cpu_count() or 4  # Separate threads for different stages
