@@ -90,7 +90,9 @@ munkres==1.1.4
 narwhals==1.40.0
 networkx==3.1
 numpy==1.24.4
+nvidia-cuda-runtime-cu11==11.8.89
 onnx==1.17.0
+onnx-graphsurgeon @ file:///opt/tensorrt/onnx_graphsurgeon/onnx_graphsurgeon-0.3.12-py2.py3-none-any.whl#sha256=1ded3e1c4d6d9870f1974c89e1f8aa0ef72c3489bbd9762ac9a5b1b64eb15678
 onnxruntime==1.19.2
 onnxruntime-gpu==1.19.2
 opencv-python==4.11.0.86
@@ -151,13 +153,22 @@ SQLAlchemy==2.0.41
 starlette==0.44.0
 sympy==1.13.3
 tabulate==0.9.0
+tensorrt-cu11==10.11.0.33
+tensorrt-dispatch-cu11==10.11.0.33
+tensorrt-lean-cu11==10.11.0.33
+tensorrt_cu11_bindings==10.11.0.33
+tensorrt_cu11_libs==10.11.0.33
+tensorrt_dispatch_cu11_bindings==10.11.0.33
+tensorrt_dispatch_cu11_libs==10.11.0.33
+tensorrt_lean_cu11_bindings==10.11.0.33
+tensorrt_lean_cu11_libs==10.11.0.33
 termcolor==2.4.0
 terminaltables==3.1.10
 tomli==2.2.1
 tomlkit==0.12.0
-torch==1.13.1+cu117
-torchaudio==0.13.1+cu117
-torchvision==0.14.1+cu117
+torch==2.0.0+cu118
+torchaudio==2.0.1+cu118
+torchvision==0.15.1+cu118
 tqdm==4.65.2
 triton==2.0.0
 typer==0.15.4

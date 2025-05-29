@@ -104,7 +104,7 @@ async def offer(request: Request):
             # 清理 MediaPlayer 资源
             if hasattr(pc, "_player") and pc._player:
                 logger.info("Closing MediaPlayer")
-                await pc._player.close()
+                pc._player._stop()
                 del pc._player
             await pc.close()
             pcs.discard(pc)
@@ -136,9 +136,8 @@ async def offer(request: Request):
         if not file_path.exists():
             return JSONResponse(status_code=400, content={"detail": "File not found"})
         try:
-            player = MediaPlayer(str(file_path))
+            player = MediaPlayer(str(file_path), loop=True)
             pc._player = player
-
             if player.video:
                 transformed = VideoTransformTrack(player.video)
                 pc.addTrack(transformed)
