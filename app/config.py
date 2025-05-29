@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     nms_thr: float = 0.4  # IoU threshold for NMS
     FPS: int = 30  # Default FPS for video processing
     WORKERS: int = os.cpu_count() or 4  # Number of CPU workers
+    DRAW_POSE_GPU: bool = True  # Use GPU for pose drawing if available
 
     class Config:
         case_sensitive = True
@@ -42,7 +43,7 @@ class BatchProcessingConfig:
     device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     # Batch settings
     batch_size: int = 16
-    max_queue_size: int = 50
+    max_queue_size: int = 400
     batch_timeout_ms: int = 2  # Max wait time to form batch
 
     # Threading settings
