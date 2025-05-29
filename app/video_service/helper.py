@@ -22,15 +22,19 @@ def timeit(func):
         wrapper: The wrapped function that measures execution time.
     """
 
+    # every 100 call this function, print the cost time\
+
     def wrapper(*args, **kwargs):
+        if not hasattr(wrapper, 'call_count'):
+            wrapper.call_count = 0
         start_time = time.time()
         result = func(*args, **kwargs)
         end_time = time.time()
         elapsed_time = end_time - start_time
-        print(f"Function '{func.__name__}' executed in {elapsed_time:.4f} seconds")
+        if wrapper.call_count % 100 == 0:
+            print(f"Function '{func.__name__}' executed in {elapsed_time:.4f} seconds")
+        wrapper.call_count += 1
         return result
-
-    return wrapper
 
 
 def inference_topdown_batch(model: nn.Module,

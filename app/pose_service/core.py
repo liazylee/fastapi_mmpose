@@ -10,7 +10,6 @@ from mmpose.structures import merge_data_samples  # noqa
 from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import settings
-from app.video_service.helper import timeit
 
 keypoint_colors = [
     (255, 0, 0),  # 0: nose
@@ -61,7 +60,9 @@ class PoseService:
             settings.POSE_CHECKPOINT,
             device=self.device,
             cfg_options=dict(
-                model=dict(test_cfg=dict(output_heatmaps=True)),
+                model=dict(test_cfg=dict(output_heatmaps=False),
+
+                           ),
             )
         )
 
@@ -83,7 +84,7 @@ class PoseService:
             skeleton_style='mmpose'
         )
 
-    @timeit
+    # @timeit
     def _draw_poses_manually(self, image, pose_results):
         """手动绘制关键点，作为备用方案"""
         vis_img = image.copy()
@@ -144,7 +145,7 @@ class PoseService:
                                     connections_drawn += 1
         return vis_img
 
-    @timeit
+    # @timeit
     def process_image(self, image):
         """
         Process a single image through detection and pose estimation pipeline.

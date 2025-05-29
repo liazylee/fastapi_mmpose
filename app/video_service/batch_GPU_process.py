@@ -9,7 +9,6 @@ from mmpose.apis import (inference_topdown, init_model as init_pose_estimator)
 from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import batch_settings, settings
-from app.video_service.helper import inference_topdown_batch
 
 logger = getLogger(__name__)
 
@@ -105,7 +104,7 @@ class BatchPoseProcessor:
                 model=dict(
                     test_cfg=dict(
                         output_heatmaps=False,  # Disable for speed
-                        flip_test=False  # Disable flip augmentation
+                        flip_test=False
                     )
                 )
             )
@@ -310,15 +309,34 @@ class BatchPoseProcessor:
         loop = asyncio.get_event_loop()
 
         def _estimate_poses():
-
+            all_pose_results = []
             try:
                 # Process each frame with its detections
-                pose_result = inference_topdown_batch(self.pose_estimator, frames, detection_results)
-                return pose_result
+                # pose_result = inference_topdown_batch(self.pose_estimator, frames, detection_results)
+                # 使用标准的单帧处理而不是批处理
+                for frame, detections in zip(frames, detection_results):
+                    if len(detections) == 0:
+                        all_pose_results.append([])
+                        continue
+
+                    # 确保检测框格式正确
+                    if detections.shape[1] > 4:
+                        bboxes = detections[:, :4]  # 只取前4列 (x1,y1,x2,y2)
+                    else:
+                        bboxes = detections
+
+                    # 使用标准的inference_topdown
+                    pose_results = inference_topdown(
+                        self.pose_estimator,
+                        frame,
+                        bboxes
+                    )
+
+                    all_pose_results.append(pose_results)
 
             except Exception as e:
                 logger.error(f"Pose estimation failed: {e}")
-                # Return empty results for all frames
+                # 返回空结果
                 all_pose_results = [[] for _ in frames]
 
             return all_pose_results

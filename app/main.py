@@ -104,7 +104,7 @@ async def offer(request: Request):
             # 清理 MediaPlayer 资源
             if hasattr(pc, "_player") and pc._player:
                 logger.info("Closing MediaPlayer")
-                await pc._player.close()
+                # await pc._player.close()
                 del pc._player
             await pc.close()
             pcs.discard(pc)

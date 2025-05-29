@@ -21,15 +21,15 @@ class Settings(BaseSettings):
 
     POSE_CONFIG: str = os.path.join(PROJECT_ROOT, "app/pose_service/configs/rtmpose-m_8xb256-420e_body8-256x192.py")
     POSE_CHECKPOINT: str = 'https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth'
-
+    # POSE_CHECKPOINT: str = 'https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.pth'
     # Device configuration
     DEVICE: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     RADIUS: int = 3
     ALPHA: float = 0.8
     LINE_WIDTH: int = 1
     det_cat_id: int = 0  # Category ID for person detection
-    bbox_thr: float = 0.4  # Threshold for bounding box confidence
-    nms_thr: float = 0.4  # IoU threshold for NMS
+    bbox_thr: float = 0.3  # Threshold for bounding box confidence
+    nms_thr: float = 0.3  # IoU threshold for NMS
     FPS: int = 30  # Default FPS for video processing
     WORKERS: int = os.cpu_count() or 4  # Number of CPU workers
 
@@ -42,15 +42,16 @@ class BatchProcessingConfig:
     device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     # Batch settings
     batch_size: int = 16
-    max_queue_size: int = 50
+    max_queue_size: int = 32
     batch_timeout_ms: int = 2  # Max wait time to form batch
 
     # Threading settings
     num_workers: int = os.cpu_count() or 4  # Separate threads for different stages
-    gpu_streams: int = 40  # CUDA streams for parallel processing
+    gpu_streams: int = 3  # CUDA streams for parallel processing
 
     # Performance settings
-    prefetch_factor: int = 20
+    use_threaded_processor: bool = True
+    prefetch_factor: int = 2
     pin_memory: bool = True
     non_blocking: bool = True
 
@@ -58,7 +59,7 @@ class BatchProcessingConfig:
     enable_tensorrt: bool = False  # Toggle for future TensorRT
     input_resolution: tuple = (1920, 1080)  # Input resolution for video processing
     detection_batch_size: int = 16  # Can differ from pose batch size
-    pose_batch_size: int = 10
+    pose_batch_size: int = 16
 
 
 batch_settings: BatchProcessingConfig = BatchProcessingConfig()
