@@ -9,6 +9,7 @@ from mmpose.apis import (inference_topdown, init_model as init_pose_estimator)
 from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import batch_settings, settings
+from app.pose_service.draw_pose import draw_poses_numba
 from app.video_service.helper import inference_topdown_batch
 
 logger = getLogger(__name__)
@@ -151,7 +152,12 @@ class BatchPoseProcessor:
             for frame, poses in zip(frames, pose_results):
                 if poses and len(poses) > 0:
                     # Use the manual drawing method from original code
-                    vis_frame = self._draw_poses_manually(frame, poses)
+                    vis_frame = draw_poses_numba(
+                        frame, poses,
+                        skeleton=None,
+
+                    )
+                    # vis_frame = self._draw_poses_manually(frame, poses)
                 else:
                     vis_frame = frame.copy()
 

@@ -100,14 +100,26 @@ async def offer(request: Request):
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
         logger.info(f"Connection state is {pc.connectionState}")
-        if pc.connectionState == "failed" or pc.connectionState == "closed":
-            # 清理 MediaPlayer 资源
+        if pc.connectionState in ["failed", "closed"]:
+            #  释放 VideoTransformTrack
+            if hasattr(pc, "_transformed_track"):
+                logger.info("Stopping VideoTransformTrack")
+                pc._transformed_track.stop()
+                del pc._transformed_track
+            # if hasattr(pc._player, "process"):
+            #     pc._player.process.kill()
+            #  释放 MediaPlayer
             if hasattr(pc, "_player") and pc._player:
                 logger.info("Closing MediaPlayer")
-                pc._player._stop()
+                if hasattr(pc._player, "close"):
+                    await pc._player.close()
                 del pc._player
+                logger.info(
+                    f"Closing VideoTransformTrack {pc._transformed_track if hasattr(pc, '_transformed_track') else 'N/A'}")
+
             await pc.close()
             pcs.discard(pc)
+            logger.info("PeerConnection closed and removed from pcs set")
 
     # 添加ICE连接状态监听
     @pc.on("iceconnectionstatechange")
@@ -123,6 +135,7 @@ async def offer(request: Request):
             logger.info(f"Track {track.kind} received")
             if track.kind == "video":
                 transformed = VideoTransformTrack(track)
+                pc._transformed_track = transformed
                 pc.addTrack(transformed)
                 logger.info("Video track transformed and added")
 
@@ -136,7 +149,7 @@ async def offer(request: Request):
         if not file_path.exists():
             return JSONResponse(status_code=400, content={"detail": "File not found"})
         try:
-            player = MediaPlayer(str(file_path), loop=True)
+            player = MediaPlayer(str(file_path), loop=False)
             pc._player = player
             if player.video:
                 transformed = VideoTransformTrack(player.video)

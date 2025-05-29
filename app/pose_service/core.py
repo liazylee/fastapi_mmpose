@@ -1,6 +1,5 @@
 import time  # noqa
 
-import cv2
 import numpy as np
 from mmdet.apis import init_detector, inference_detector
 from mmpose.apis import (inference_topdown, init_model as init_pose_estimator)
@@ -10,9 +9,8 @@ from mmpose.structures import merge_data_samples  # noqa
 from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import settings
-from app.pose_service.draw_pose import _draw_line_numba, _draw_circle_numba, draw_poses_numba, draw_poses_gpu_torch
+from app.pose_service.draw_pose import draw_poses_numba, draw_poses_gpu
 from app.video_service.helper import timeit
-
 
 
 class PoseService:
@@ -59,7 +57,6 @@ class PoseService:
             skeleton_style='mmpose'
         )
 
-
     @timeit
     def process_image(self, image):
         """
@@ -96,9 +93,9 @@ class PoseService:
 
         if settings.DRAW_POSE_GPU:
             # Use Numba for GPU-accelerated drawing
-            vis_img = draw_poses_gpu_torch(image, pose_results,self.skeleton,self.device)
+            vis_img = draw_poses_gpu(image, pose_results, self.skeleton, self.device)
         else:
-            vis_img = draw_poses_numba(image, pose_results,self.skeleton)
+            vis_img = draw_poses_numba(image, pose_results, self.skeleton)
         return vis_img, pose_results
         # Create a singleton instance
 

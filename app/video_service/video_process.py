@@ -15,7 +15,6 @@ class VideoTransformTrack(VideoStreamTrack):
         super().__init__()
         self.track = track
         self.config = config or batch_settings
-
         # Use async pose service
         self.pose_service = AsyncPoseService(self.config)
 
@@ -51,6 +50,7 @@ class VideoTransformTrack(VideoStreamTrack):
             self.pose_service.stop()
 
         logger.info(f"Stopped pose service: {self.pose_service}")
+        logger.warning("recv exited due to stop()")
 
     def __del__(self):
         """析构时清理资源"""
