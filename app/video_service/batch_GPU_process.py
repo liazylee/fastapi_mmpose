@@ -7,16 +7,16 @@ import torch
 from mmdet.apis import init_detector, inference_detector
 from mmpose.apis import (inference_topdown, init_model as init_pose_estimator)
 from mmpose.utils import adapt_mmdet_pipeline
-
+from mmpose.evaluation.functional import nms
 from app.config import batch_settings, settings
 from app.pose_service.draw_pose import draw_poses_numba
-from app.video_service.helper import inference_topdown_batch
+from app.video_service.helper import inference_topdown_batch, batch_inference_detector
 
 logger = getLogger(__name__)
 
 
 class BatchPoseProcessor:
-    """Optimized batch processing for RTX 4090"""
+    """Optimized batch processing """
 
     def __init__(self, config: batch_settings = batch_settings):
         self.config = config
@@ -248,68 +248,70 @@ class BatchPoseProcessor:
 
         return processed_frames  # Return list of numpy arrays, not tensor
 
-    async def _batch_detect(self, batch_tensor):
+    async def _batch_detect(self, batch_tensor)->list[np.ndarray]:
         """Batch person detection"""
         loop = asyncio.get_event_loop()
 
         def _detect():
-            results = []
+            #results = []
 
             # Process each frame individually to avoid pipeline issues
-            for frame in batch_tensor:
-                try:
-                    # Convert tensor back to numpy if needed
-                    if isinstance(frame, torch.Tensor):
-                        frame_np = frame.cpu().numpy()
-                    else:
-                        frame_np = frame
 
-                    # Ensure correct format (BGR)
-                    if frame_np.dtype != np.uint8:
-                        frame_np = frame_np.astype(np.uint8)
+            return batch_inference_detector(self.detector, batch_tensor)
+            # for frame in batch_tensor:
+            #     try:
+            #         # Convert tensor back to numpy if needed
+            #         if isinstance(frame, torch.Tensor):
+            #             frame_np = frame.cpu().numpy()
+            #         else:
+            #             frame_np = frame
+            #
+            #         # Ensure correct format (BGR)
+            #         if frame_np.dtype != np.uint8:
+            #             frame_np = frame_np.astype(np.uint8)
+            #
+            #         # Run detection
+            #         det_result = inference_detector(self.detector, frame_np)
+            #         filtered_boxes = self._filter_detections(det_result)
+            #         results.append(filtered_boxes)
+            #
+            #     except Exception as e:
+            #         logger.error(f"Detection failed for frame: {e}")
+            #         # Return empty detection for failed frame
+            #         results.append(np.array([]).reshape(0, 5))
 
-                    # Run detection
-                    det_result = inference_detector(self.detector, frame_np)
-                    filtered_boxes = self._filter_detections(det_result)
-                    results.append(filtered_boxes)
-
-                except Exception as e:
-                    logger.error(f"Detection failed for frame: {e}")
-                    # Return empty detection for failed frame
-                    results.append(np.array([]).reshape(0, 5))
-
-            return results
+            # return results
 
         return await loop.run_in_executor(None, _detect)
 
-    def _filter_detections(self, det_result):
-        """Filter and process detection results"""
-        pred_instance = det_result.pred_instances.cpu().numpy()
-
-        if pred_instance is None or len(pred_instance) == 0:
-            return np.array([]).reshape(0, 5)
-
-        # Filter by category (person) and confidence
-        person_mask = np.logical_and(
-            pred_instance.labels == settings.det_cat_id,
-            pred_instance.scores > settings.bbox_thr
-        )
-
-        if not person_mask.any():
-            return np.array([]).reshape(0, 5)
-
-        # Get filtered boxes and scores
-        boxes = pred_instance.bboxes[person_mask]
-        scores = pred_instance.scores[person_mask]
-
-        # Combine boxes with scores
-        detections = np.concatenate([boxes, scores[:, None]], axis=1)
-
-        # Apply NMS
-        from mmpose.evaluation.functional import nms
-        keep_indices = nms(detections, settings.nms_thr)
-
-        return detections[keep_indices, :4]  # Return only box coordinates
+    # def _filter_detections(self, det_result)->np.ndarray:
+    #     """Filter and process detection results"""
+    #     pred_instance = det_result.pred_instances.cpu().numpy()  # Ensure numpy array
+    #
+    #     if pred_instance is None or len(pred_instance) == 0:
+    #         return np.array([]).reshape(0, 5)
+    #
+    #     # Filter by category (person) and confidence
+    #     person_mask = np.logical_and(
+    #         pred_instance.labels == settings.det_cat_id,
+    #         pred_instance.scores > settings.bbox_thr
+    #     )
+    #
+    #     if not person_mask.any():
+    #         return np.array([]).reshape(0, 5)
+    #
+    #     # Get filtered boxes and scores
+    #     boxes = pred_instance.bboxes[person_mask]
+    #     scores = pred_instance.scores[person_mask]
+    #
+    #     # Combine boxes with scores
+    #     detections = np.concatenate([boxes, scores[:, None]], axis=1)
+    #
+    #     # Apply NMS
+    #
+    #     keep_indices = nms(detections, settings.nms_thr)
+    #
+    #     return detections[keep_indices, :4]  # Return only box coordinates
 
     async def _batch_pose_estimation(self, frames, detection_results):
         """Batch pose estimation with smart batching"""
@@ -330,3 +332,4 @@ class BatchPoseProcessor:
             return all_pose_results
 
         return await loop.run_in_executor(None, _estimate_poses)
+

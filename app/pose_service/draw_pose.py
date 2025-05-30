@@ -18,12 +18,12 @@
                   ┃┫┫  ┃┫┫
                   ┗┻┛  ┗┻┛
 """
-import numpy as np
-import torch
 # Add to imports
 from numba import jit, prange
+import torch
+import torch.nn.functional as F
+import numpy as np
 
-from app.video_service.helper import timeit
 
 keypoint_colors = [
     (255, 0, 0),  # 0: nose
@@ -51,28 +51,18 @@ default_skeleton = [
     [1, 2], [0, 1], [0, 2], [1, 3], [2, 4],  # 头部
     [0, 5], [0, 6]  # 头部到肩膀 (可选)
 ]
-default_coco_skeleton = [
-    [16, 14], [14, 12], [17, 15], [15, 13],
-    [12, 13], [6, 12], [7, 13], [6, 7],
-    [6, 8], [7, 9], [8, 10], [9, 11],
-    [2, 3], [1, 2], [1, 3], [2, 4], [3, 5],
-    [4, 6], [5, 7]
-]
-
-COCO_SKELETON = [[x - 1, y - 1] for x, y in default_coco_skeleton]
-
 
 # Add these Numba-accelerated drawing functions
 @jit(nopython=True, parallel=True)
 def _draw_circle_numba(img, x, y, radius, color, thickness):
     height, width = img.shape[:2]
-    radius_sq = radius ** 2
-    inner_sq = (radius - thickness) ** 2
+    radius_sq = radius**2
+    inner_sq = (radius - thickness)**2
 
     for i in prange(x - radius, x + radius + 1):
         for j in prange(y - radius, y + radius + 1):
             if 0 <= i < width and 0 <= j < height:
-                dist_sq = (i - x) ** 2 + (j - y) ** 2
+                dist_sq = (i - x)**2 + (j - y)**2
                 if thickness < 0:  # 实心圆
                     if dist_sq <= radius_sq:
                         img[j, i] = color
@@ -108,15 +98,13 @@ def _draw_line_numba(img, x1, y1, x2, y2, color, thickness=1):
             err += dx
             y1 += sy
 
-
-# @timeit
 def draw_poses_numba(image, pose_results, skeleton=None):
     """Numba-accelerated pose visualization"""
     vis_img = image.copy()
 
     # Get skeleton information
     if not skeleton:
-        skeleton = COCO_SKELETON
+        skeleton = default_skeleton
 
     for pose_result in pose_results:
         if hasattr(pose_result, 'pred_instances'):
@@ -163,16 +151,15 @@ def draw_poses_numba(image, pose_results, skeleton=None):
     return vis_img
 
 
+
 def create_circle_template(radius, color, device):
     diameter = 2 * radius + 1
-    grid_y, grid_x = torch.meshgrid(torch.arange(diameter, device=device), torch.arange(diameter, device=device),
-                                    indexing='ij')
-    dist_sq = (grid_x - radius) ** 2 + (grid_y - radius) ** 2
-    mask = dist_sq <= radius ** 2
+    grid_y, grid_x = torch.meshgrid(torch.arange(diameter, device=device), torch.arange(diameter, device=device), indexing='ij')
+    dist_sq = (grid_x - radius)**2 + (grid_y - radius)**2
+    mask = dist_sq <= radius**2
     circle_tensor = torch.zeros((3, diameter, diameter), device=device)
     circle_tensor[:, mask] = color.view(3, 1)
     return circle_tensor
-
 
 # GPU批量绘制关键点
 def draw_keypoints_gpu(vis_tensor, keypoints, scores, keypoint_colors, radius=3, score_thresh=0.3):
@@ -202,11 +189,10 @@ def draw_keypoints_gpu(vis_tensor, keypoints, scores, keypoint_colors, radius=3,
 
                 vis_tensor[:, y1:y2, x1:x2] = circle_tensor[:, c_y1:c_y2, c_x1:c_x2]
 
-
 # GPU批量绘制骨架连接线
 def draw_skeleton_gpu(vis_tensor, keypoints, scores, skeleton, line_color, score_thresh=0.3):
     _, height, width = vis_tensor.shape
-    line_color = line_color.to(vis_tensor.dtype)
+
     for person_idx in range(keypoints.shape[0]):
         person_kpts = keypoints[person_idx]
         person_scores = scores[person_idx]
@@ -221,21 +207,16 @@ def draw_skeleton_gpu(vis_tensor, keypoints, scores, skeleton, line_color, score
                 num_points = max(abs(x2 - x1), abs(y2 - y1)) * 2
                 t = torch.linspace(0, 1, num_points, device=vis_tensor.device)
 
-                # 插值为 float32，但要转换成索引
-                line_x = (x1 * (1 - t) + x2 * t).round().long()
-                line_y = (y1 * (1 - t) + y2 * t).round().long()
+                line_x = (x1 * (1 - t) + x2 * t).long()
+                line_y = (y1 * (1 - t) + y2 * t).long()
 
                 valid_mask = (line_x >= 0) & (line_x < width) & (line_y >= 0) & (line_y < height)
                 line_x = line_x[valid_mask]
                 line_y = line_y[valid_mask]
 
-                # 使用 advanced indexing 赋值颜色（必须 shape = [3, N]）
-                for c in range(3):
-                    vis_tensor[c, line_y, line_x] = line_color[c]
-
+                vis_tensor[:, line_y, line_x] = line_color.view(3, 1)
 
 # 主函数：GPU加速姿态绘制
-@timeit
 def draw_poses_gpu(image, pose_results, skeleton=None, device='cuda'):
     if isinstance(image, np.ndarray):
         image_tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float()
@@ -254,6 +235,7 @@ def draw_poses_gpu(image, pose_results, skeleton=None, device='cuda'):
         [255, 0, 170]
     ], device=device).float()
 
+    circle_tensor = create_circle_template(3, torch.tensor([0, 255, 0], device=device), device)
     line_color = torch.tensor([0, 255, 0], device=device).float()
 
     for pose_result in pose_results:
@@ -272,3 +254,5 @@ def draw_poses_gpu(image, pose_results, skeleton=None, device='cuda'):
     vis_img = vis_tensor.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
 
     return vis_img
+
+
