@@ -18,12 +18,10 @@
                   ┃┫┫  ┃┫┫
                   ┗┻┛  ┗┻┛
 """
+import numpy as np
+import torch
 # Add to imports
 from numba import jit, prange
-import torch
-import torch.nn.functional as F
-import numpy as np
-
 
 keypoint_colors = [
     (255, 0, 0),  # 0: nose
@@ -52,17 +50,18 @@ default_skeleton = [
     [0, 5], [0, 6]  # 头部到肩膀 (可选)
 ]
 
+
 # Add these Numba-accelerated drawing functions
 @jit(nopython=True, parallel=True)
 def _draw_circle_numba(img, x, y, radius, color, thickness):
     height, width = img.shape[:2]
-    radius_sq = radius**2
-    inner_sq = (radius - thickness)**2
+    radius_sq = radius ** 2
+    inner_sq = (radius - thickness) ** 2
 
     for i in prange(x - radius, x + radius + 1):
         for j in prange(y - radius, y + radius + 1):
             if 0 <= i < width and 0 <= j < height:
-                dist_sq = (i - x)**2 + (j - y)**2
+                dist_sq = (i - x) ** 2 + (j - y) ** 2
                 if thickness < 0:  # 实心圆
                     if dist_sq <= radius_sq:
                         img[j, i] = color
@@ -98,7 +97,8 @@ def _draw_line_numba(img, x1, y1, x2, y2, color, thickness=1):
             err += dx
             y1 += sy
 
-def draw_poses_numba(image, pose_results, skeleton=None):
+
+def draw_poses_numba(image, keypoints, skeleton=None) -> np.ndarray:
     """Numba-accelerated pose visualization"""
     vis_img = image.copy()
 
@@ -106,7 +106,7 @@ def draw_poses_numba(image, pose_results, skeleton=None):
     if not skeleton:
         skeleton = default_skeleton
 
-    for pose_result in pose_results:
+    for pose_result in keypoints:
         if hasattr(pose_result, 'pred_instances'):
             pred_instances = pose_result.pred_instances
 
@@ -151,15 +151,16 @@ def draw_poses_numba(image, pose_results, skeleton=None):
     return vis_img
 
 
-
 def create_circle_template(radius, color, device):
     diameter = 2 * radius + 1
-    grid_y, grid_x = torch.meshgrid(torch.arange(diameter, device=device), torch.arange(diameter, device=device), indexing='ij')
-    dist_sq = (grid_x - radius)**2 + (grid_y - radius)**2
-    mask = dist_sq <= radius**2
+    grid_y, grid_x = torch.meshgrid(torch.arange(diameter, device=device), torch.arange(diameter, device=device),
+                                    indexing='ij')
+    dist_sq = (grid_x - radius) ** 2 + (grid_y - radius) ** 2
+    mask = dist_sq <= radius ** 2
     circle_tensor = torch.zeros((3, diameter, diameter), device=device)
     circle_tensor[:, mask] = color.view(3, 1)
     return circle_tensor
+
 
 # GPU批量绘制关键点
 def draw_keypoints_gpu(vis_tensor, keypoints, scores, keypoint_colors, radius=3, score_thresh=0.3):
@@ -189,6 +190,7 @@ def draw_keypoints_gpu(vis_tensor, keypoints, scores, keypoint_colors, radius=3,
 
                 vis_tensor[:, y1:y2, x1:x2] = circle_tensor[:, c_y1:c_y2, c_x1:c_x2]
 
+
 # GPU批量绘制骨架连接线
 def draw_skeleton_gpu(vis_tensor, keypoints, scores, skeleton, line_color, score_thresh=0.3):
     _, height, width = vis_tensor.shape
@@ -216,8 +218,9 @@ def draw_skeleton_gpu(vis_tensor, keypoints, scores, skeleton, line_color, score
 
                 vis_tensor[:, line_y, line_x] = line_color.view(3, 1)
 
+
 # 主函数：GPU加速姿态绘制
-def draw_poses_gpu(image, pose_results, skeleton=None, device='cuda'):
+def draw_poses_gpu(image, keypoints, skeleton=None, device='cuda'):
     if isinstance(image, np.ndarray):
         image_tensor = torch.from_numpy(image).to(device).permute(2, 0, 1).float()
     else:
@@ -238,7 +241,7 @@ def draw_poses_gpu(image, pose_results, skeleton=None, device='cuda'):
     circle_tensor = create_circle_template(3, torch.tensor([0, 255, 0], device=device), device)
     line_color = torch.tensor([0, 255, 0], device=device).float()
 
-    for pose_result in pose_results:
+    for pose_result in keypoints:
         pred_instances = pose_result.pred_instances
 
         keypoints = pred_instances.keypoints
@@ -254,5 +257,3 @@ def draw_poses_gpu(image, pose_results, skeleton=None, device='cuda'):
     vis_img = vis_tensor.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
 
     return vis_img
-
-

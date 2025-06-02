@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from app.api.v1.api import api_router
+# from app.api.v1.api import api_router
 from app.config import settings
 from app.video_service.video_process import pcs, VideoTransformTrack
 
@@ -43,7 +43,7 @@ app.add_middleware(
 )
 
 # Include API router
-app.include_router(api_router, prefix=settings.API_V1_STR)
+# app.include_router(api_router, prefix=settings.API_V1_STR)
 # 挂载 uploads 路由
 app.mount(
     "/uploads",

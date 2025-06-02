@@ -40,7 +40,8 @@ class Settings(BaseSettings):
 
 @dataclass
 class BatchProcessingConfig:
-    device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    PROJECT_ROOT: ClassVar[str] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # Batch settings
     batch_size: int = 16
     max_queue_size: int = 40
@@ -60,6 +61,11 @@ class BatchProcessingConfig:
     input_resolution: tuple = (1920, 1080)  # Input resolution for video processing
     detection_batch_size: int = 16  # Can differ from pose batch size
     pose_batch_size: int = 10
+    openpose_skeleton: bool = False  # Use OpenPose skeleton for pose estimation or mmpose-style
+    backend: str = 'onnxruntime'  # Backend for model inference, e.g., 'onnxruntime', 'cpu','mps'
+    onnx_model = str = os.path.join(PROJECT_ROOT,
+                                    "app/pose_service/configs/rtmpose_onnx/"
+                                    "rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504/end2end.onnx")
 
 
 batch_settings: BatchProcessingConfig = BatchProcessingConfig()

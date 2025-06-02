@@ -4,8 +4,9 @@ from aiortc import VideoStreamTrack
 from av import VideoFrame
 
 from app.config import batch_settings
-from app.video_service.async_pose_service import AsyncPoseService
+# from app.video_service.async_pose_service import AsyncPoseService
 from app.video_service.permance_monitor import monitor
+from app.video_service.rtlib import rtlib_service
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class VideoTransformTrack(VideoStreamTrack):
         self.track = track
         self.config = config or batch_settings
         # Use async pose service
-        self.pose_service = AsyncPoseService(self.config)
+        self.pose_service = rtlib_service
 
     async def recv(self):
         monitor.start_frame()
@@ -24,7 +25,7 @@ class VideoTransformTrack(VideoStreamTrack):
         img = frame.to_ndarray(format="bgr24")
         monitor.frame_received()
         # Process through async pipeline
-        vis_img, pose_results = await self.pose_service.process_frame_async(img)
+        vis_img = await self.pose_service.predict_and_visualize(img)
 
         if vis_img is not None:
             img = vis_img
