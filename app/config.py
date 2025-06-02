@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     POSE_CHECKPOINT: str = 'https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth'
 
     # Device configuration
-    DEVICE: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    DEVICE: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     RADIUS: int = 3
     ALPHA: float = 0.8
     LINE_WIDTH: int = 1

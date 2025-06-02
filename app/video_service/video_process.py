@@ -6,37 +6,43 @@ from aiortc import VideoStreamTrack
 from av import VideoFrame
 
 from app.config import batch_settings
-# from app.video_service.async_pose_service import AsyncPoseService
+from app.video_service.batch_processor import batch_processor
 from app.video_service.permance_monitor import monitor
-from app.video_service.rtlib import rtlib_service
 
 logger = logging.getLogger(__name__)
 
 
 class VideoTransformTrack(VideoStreamTrack):
-    """Video track that applies pose estimation to each frame."""
-    
+    """应用姿态估计处理视频帧的视频轨道"""
+
     def __init__(self, track, config=None):
         super().__init__()
         self.track = track
         self.config = config or batch_settings
         self.active = True
-        # Use async pose service
-        self.pose_service = rtlib_service
+        self.frame_counter = 0
+
+        # 启动批处理器
+        asyncio.create_task(batch_processor.start())
 
     async def recv(self):
-        """Process each video frame with pose estimation."""
+        """处理每个带姿态估计的视频帧"""
         if not self.active:
-            logger.warning("Received frame after track was stopped")
+            logger.warning("轨道停止后收到帧")
             return await self.track.recv()
-        
+
         monitor.start_frame()
         frame = await self.track.recv()
         img = frame.to_ndarray(format="bgr24")
         monitor.frame_received()
-        
-        # Process through RTLib pipeline
-        vis_img = await self.pose_service.predict_vis(img)
+
+        # 生成唯一的帧ID
+        frame_id = self.frame_counter
+        self.frame_counter += 1
+
+        # 通过批处理器处理
+        vis_img = await batch_processor.process_frame(frame_id, img)
+
         if vis_img is not None:
             img = vis_img
 
@@ -46,15 +52,24 @@ class VideoTransformTrack(VideoStreamTrack):
         monitor.frame_processed()
         return new_frame
 
+    def stop(self):
+        """停止处理并清理资源"""
+        self.active = False
+        logger.info("视频轨道已停止")
+
+        # 停止批处理器
+        asyncio.create_task(batch_processor.stop())
+
+        # 清理连接管理
+        cleanup_pcs()
 
 
-
-# Connection management
+# 连接管理
 pcs: Set = set()
 
 
 def cleanup_pcs():
-    """Remove closed connections from the set."""
+    """从集合中移除已关闭的连接"""
     closed_pcs = {pc for pc in pcs if pc.connectionState == 'closed'}
     pcs.difference_update(closed_pcs)
     return len(closed_pcs)
