@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from typing import Set
 
 from aiortc import VideoStreamTrack
 from av import VideoFrame
@@ -12,21 +14,29 @@ logger = logging.getLogger(__name__)
 
 
 class VideoTransformTrack(VideoStreamTrack):
+    """Video track that applies pose estimation to each frame."""
+    
     def __init__(self, track, config=None):
         super().__init__()
         self.track = track
         self.config = config or batch_settings
+        self.active = True
         # Use async pose service
         self.pose_service = rtlib_service
 
     async def recv(self):
+        """Process each video frame with pose estimation."""
+        if not self.active:
+            logger.warning("Received frame after track was stopped")
+            return await self.track.recv()
+        
         monitor.start_frame()
         frame = await self.track.recv()
         img = frame.to_ndarray(format="bgr24")
         monitor.frame_received()
-        # Process through async pipeline
-        vis_img = await self.pose_service.predict_and_visualize(img)
-
+        
+        # Process through RTLib pipeline
+        vis_img = await self.pose_service.predict_vis(img)
         if vis_img is not None:
             img = vis_img
 
@@ -36,37 +46,15 @@ class VideoTransformTrack(VideoStreamTrack):
         monitor.frame_processed()
         return new_frame
 
-    def stop(self):
-        """停止处理服务"""
-        if hasattr(self.pose_service, 'stop_pipeline'):
-            # AsyncPoseService
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(self.pose_service.stop_pipeline())
-            except Exception as e:
-                logger.error(f"Error stopping AsyncPoseService: {e}")
-        elif hasattr(self.pose_service, 'stop'):
-            # ThreadedPoseService
-            self.pose_service.stop()
 
-        logger.info(f"Stopped pose service: {self.pose_service}")
-        logger.warning("recv exited due to stop()")
-
-    def __del__(self):
-        """析构时清理资源"""
-        try:
-            self.stop()
-        except:
-            pass
 
 
 # Connection management
-pcs = set()
+pcs: Set = set()
 
 
 def cleanup_pcs():
-    """Remove closed connections from the set"""
+    """Remove closed connections from the set."""
     closed_pcs = {pc for pc in pcs if pc.connectionState == 'closed'}
     pcs.difference_update(closed_pcs)
     return len(closed_pcs)

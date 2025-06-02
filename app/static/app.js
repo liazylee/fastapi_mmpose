@@ -163,6 +163,11 @@ async function startConnection() {
         };
         const payload = {sdp: '', type: 'offer', mode: mode};
         if (mode === 'camera') {
+            // mac is not supported with getUserMedia in google chrome
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                updateStatus('Camera access is not supported in this browser');
+                return;
+            }
             localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: false});
             local.srcObject = localStream;
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));

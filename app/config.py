@@ -66,6 +66,7 @@ class BatchProcessingConfig:
     onnx_model = str = os.path.join(PROJECT_ROOT,
                                     "app/pose_service/configs/rtmpose_onnx/"
                                     "rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504/end2end.onnx")
+    mode: str = 'balanced'  # Mode for RTMPose, can be 'performance' ,'lightweight', or 'balanced'
 
 
 batch_settings: BatchProcessingConfig = BatchProcessingConfig()
