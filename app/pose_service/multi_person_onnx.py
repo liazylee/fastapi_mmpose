@@ -198,12 +198,12 @@ class MultiPersonONNXPoseEstimator:
 
         # 为每个人使用不同的颜色
         person_colors = [
-            (255, 0, 0),  # 红
+            # (255, 0, 0),  # 红
             (0, 255, 0),  # 绿
-            (0, 0, 255),  # 蓝
-            (255, 255, 0),  # 黄
-            (255, 0, 255),  # 紫
-            (0, 255, 255),  # 青
+            # (0, 0, 255),  # 蓝
+            # (255, 255, 0),  # 黄
+            # (255, 0, 255),  # 紫
+            # (0, 255, 255),  # 青
         ]
 
         for person_idx, (keypoints, scores) in enumerate(zip(keypoints_list, scores_list)):
