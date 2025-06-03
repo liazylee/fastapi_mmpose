@@ -16,7 +16,7 @@ logger = getLogger(__name__)
 
 
 class BatchPoseProcessorONNX:
-    """Optimized batch processing with ONNX pose estimator for RTX 4090"""
+    """Optimized batch processing with ONNX pose estimator with tracking support"""
 
     def __init__(self, config=None, onnx_file: str = None):
         self.config = config or batch_settings
@@ -25,14 +25,14 @@ class BatchPoseProcessorONNX:
         # Initialize detector first
         self._init_detector()
 
-        # Initialize ONNX-based multi-person pose estimator
+        # Initialize ONNX-based multi-person pose estimator with tracking
         self.onnx_file = onnx_file or self._get_default_onnx_path()
         self.pose_estimator = MultiPersonONNXPoseEstimator(self.onnx_file, self.device)
         self.pose_estimator.set_detector(self.detector)
 
         # Warm up models
         self._warm_up_models()
-        logger.info("ONNX Batch processor initialized successfully")
+        logger.info("ONNX Batch processor with tracking initialized successfully")
 
     def _get_default_onnx_path(self) -> str:
         """Get default ONNX model path"""
@@ -61,8 +61,20 @@ class BatchPoseProcessorONNX:
 
         logger.info("ONNX model warmup completed")
 
+    def reset_tracking(self):
+        """重置tracking状态"""
+        if hasattr(self.pose_estimator, 'reset_tracking'):
+            self.pose_estimator.reset_tracking()
+            logger.info("Tracking reset in batch processor")
+
+    def set_tracking_enabled(self, enabled: bool):
+        """启用/禁用tracking"""
+        if hasattr(self.pose_estimator, 'set_tracking_enabled'):
+            self.pose_estimator.set_tracking_enabled(enabled)
+            logger.info(f"Tracking {'enabled' if enabled else 'disabled'} in batch processor")
+
     async def process_batch(self, batch_items: List[dict]) -> List[Tuple]:
-        """Process batch of frames efficiently with ONNX pose estimator
+        """Process batch of frames efficiently with ONNX pose estimator and tracking
 
         Args:
             batch_items: List of batch items with 'frame' key
@@ -81,7 +93,7 @@ class BatchPoseProcessorONNX:
                 # Ensure frame is in correct format
                 processed_frame = self._ensure_frame_format(frame)
 
-                # Process with multi-person ONNX estimator
+                # Process with multi-person ONNX estimator (now with tracking)
                 vis_img, keypoints_list, scores_list = self.pose_estimator.inference(processed_frame)
 
                 # Format results to match expected interface

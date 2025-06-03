@@ -13,7 +13,10 @@ from fastapi.templating import Jinja2Templates
 # from app.api.v1.api import api_router
 from app.config import settings
 from app.video_service import VideoTransformTrack
-from app.video_service.video_process import pcs
+from app.video_service.video_process import (
+    pcs, register_video_track, unregister_video_track,
+    get_global_tracking_status, set_global_tracking_enabled, reset_global_tracking
+)
 
 # 启用日志
 logging.basicConfig(level=logging.INFO)
@@ -30,7 +33,7 @@ if not STATIC_DIR.exists():
     STATIC_DIR.mkdir(parents=True)
 app = FastAPI(
     title=settings.APP_NAME,
-    description="FastAPI application for MMPose integration",
+    description="FastAPI application for MMPose integration with tracking",
     version="1.0.0"
 )
 
@@ -102,6 +105,9 @@ async def offer(request: Request):
     async def on_connectionstatechange():
         logger.info(f"Connection state is {pc.connectionState}")
         if pc.connectionState in ("failed", "closed"):
+            # 清理video track
+            if hasattr(pc, "_video_track") and pc._video_track:
+                unregister_video_track(pc._video_track)
             # 停止并清理 MediaPlayer
             if hasattr(pc, "_player") and pc._player:
                 logger.info("Stopping MediaPlayer tracks")
@@ -128,7 +134,10 @@ async def offer(request: Request):
             if track.kind == "video":
                 transformed = VideoTransformTrack(track)
                 pc.addTrack(transformed)
-                logger.info("Video track transformed and added")
+                # 注册video track以便tracking控制
+                register_video_track(transformed)
+                pc._video_track = transformed  # 保存引用用于清理
+                logger.info("Video track transformed and added with tracking support")
 
         await pc.setRemoteDescription(offers)
     elif mode == "upload":
@@ -145,7 +154,10 @@ async def offer(request: Request):
             if player.video:
                 transformed = VideoTransformTrack(player.video)
                 pc.addTrack(transformed)
-                logger.info("Video track added using MediaPlayer")
+                # 注册video track以便tracking控制
+                register_video_track(transformed)
+                pc._video_track = transformed  # 保存引用用于清理
+                logger.info("Video track added using MediaPlayer with tracking support")
                 await pc.setRemoteDescription(offers)
             else:
                 return JSONResponse(status_code=400, content={"detail": "No video track in file"})
@@ -166,7 +178,10 @@ async def offer(request: Request):
             if player.video:
                 transformed = VideoTransformTrack(player.video)
                 pc.addTrack(transformed)
-                logger.info("Video track from stream added")
+                # 注册video track以便tracking控制
+                register_video_track(transformed)
+                pc._video_track = transformed  # 保存引用用于清理
+                logger.info("Video track from stream added with tracking support")
             else:
                 return JSONResponse(status_code=400, content={"detail": "No video track in stream"})
         except Exception as e:
@@ -199,3 +214,29 @@ async def on_shutdown():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+# Tracking control API endpoints
+@app.post("/tracking/reset")
+async def reset_tracking():
+    """重置所有活跃连接的tracking功能"""
+    reset_global_tracking()
+    return {"status": "success", "message": "All tracking reset"}
+
+
+@app.post("/tracking/toggle")
+async def toggle_tracking(enabled: bool = True):
+    """启用或禁用所有连接的tracking功能"""
+    set_global_tracking_enabled(enabled)
+    return {"status": "success", "enabled": enabled, "message": f"Tracking {'enabled' if enabled else 'disabled'} for all connections"}
+
+
+@app.get("/tracking/status")
+async def get_tracking_status():
+    """获取全局tracking状态"""
+    status = get_global_tracking_status()
+    return {
+        "enabled": status["enabled"],
+        "active_video_tracks": status["active_tracks"],
+        "active_connections": len(pcs)
+    }

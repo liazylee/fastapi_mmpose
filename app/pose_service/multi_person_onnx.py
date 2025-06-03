@@ -1,19 +1,20 @@
 # app/pose_service/multi_person_onnx.py
 
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import cv2
 import numpy as np
 from mmdet.apis import inference_detector
 
 from app.pose_service.onnx_inference import ONNXPoseEstimator
+from app.pose_service.draw_pose_numba import draw_multi_person_pose_numba
 
 logger = logging.getLogger(__name__)
 
 
 class MultiPersonONNXPoseEstimator:
-    """多人姿态估计器，结合MMDetection检测器和ONNX姿态模型"""
+    """多人姿态估计器，结合MMDetection检测器和ONNX姿态模型，支持tracking"""
 
     def __init__(self, onnx_file: str, device: str = 'cuda'):
         """初始化多人姿态估计器
@@ -30,12 +31,163 @@ class MultiPersonONNXPoseEstimator:
         self.det_score_thr = 0.5
         self.pose_score_thr = 0.3
 
+        # Tracking相关
+        self.enable_tracking = True
+        self.track_history = []  # 存储历史tracks
+        self.next_track_id = 1
+        self.max_track_age = 10  # tracks的最大保留帧数
+        self.iou_threshold = 0.5  # IoU阈值用于tracking
+
     def set_detector(self, detector):
         """设置人体检测器"""
         self.detector = detector
 
+    def reset_tracking(self):
+        """重置tracking状态并清理内存"""
+        logger.info(f"Resetting tracking - clearing {len(self.track_history)} track objects")
+        
+        # 清理tracking历史数据
+        for track in self.track_history:
+            # 清理numpy数组数据
+            if 'keypoints' in track:
+                track['keypoints'] = None
+            if 'scores' in track:
+                track['scores'] = None
+            if 'bbox' in track:
+                track['bbox'] = None
+            track.clear()
+        
+        self.track_history.clear()
+        self.next_track_id = 1
+        
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+        
+        logger.info("Tracking reset completed with memory cleanup")
+
+    def set_tracking_enabled(self, enabled: bool = True):
+        """启用/禁用tracking"""
+        self.enable_tracking = enabled
+        if not enabled:
+            self.reset_tracking()
+
+    def _compute_iou(self, bbox1, bbox2):
+        """计算两个边界框的IoU"""
+        x1 = max(bbox1[0], bbox2[0])
+        y1 = max(bbox1[1], bbox2[1])
+        x2 = min(bbox1[2], bbox2[2])
+        y2 = min(bbox1[3], bbox2[3])
+
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+
+        intersection = (x2 - x1) * (y2 - y1)
+        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0.0
+
+    def _track_persons(self, current_detections) -> List[Dict]:
+        """基于IoU的简单tracking算法"""
+        if not self.enable_tracking:
+            # 如果不启用tracking，每个检测都分配新ID
+            tracked_objects = []
+            for i, detection in enumerate(current_detections):
+                tracked_objects.append({
+                    'track_id': i + 1,
+                    'bbox': detection['bbox'],
+                    'keypoints': detection['keypoints'],
+                    'scores': detection['scores'],
+                    'age': 0
+                })
+            return tracked_objects
+
+        # 如果没有历史tracks，初始化
+        if not self.track_history:
+            tracked_objects = []
+            for detection in current_detections:
+                tracked_objects.append({
+                    'track_id': self.next_track_id,
+                    'bbox': detection['bbox'],
+                    'keypoints': detection['keypoints'],
+                    'scores': detection['scores'],
+                    'age': 0
+                })
+                self.next_track_id += 1
+            self.track_history = tracked_objects
+            return tracked_objects
+
+        # 计算IoU矩阵
+        n_detections = len(current_detections)
+        n_tracks = len(self.track_history)
+
+        if n_detections == 0:
+            # 没有新检测，增加所有tracks的age
+            for track in self.track_history:
+                track['age'] += 1
+            # 移除过老的tracks
+            self.track_history = [track for track in self.track_history if track['age'] < self.max_track_age]
+            return self.track_history
+
+        iou_matrix = np.zeros((n_detections, n_tracks))
+        for i, detection in enumerate(current_detections):
+            for j, track in enumerate(self.track_history):
+                iou_matrix[i, j] = self._compute_iou(detection['bbox'], track['bbox'])
+
+        # 贪心匹配：按IoU从大到小匹配
+        matched_detections = set()
+        matched_tracks = set()
+        updated_tracks = []
+
+        # 找到所有IoU > threshold的匹配
+        matches = []
+        for i in range(n_detections):
+            for j in range(n_tracks):
+                if iou_matrix[i, j] > self.iou_threshold:
+                    matches.append((i, j, iou_matrix[i, j]))
+
+        matches.sort(key=lambda x: x[2], reverse=True)
+
+        # 进行匹配
+        for det_idx, track_idx, iou_score in matches:
+            if det_idx not in matched_detections and track_idx not in matched_tracks:
+                # 更新现有track
+                track = self.track_history[track_idx]
+                track['bbox'] = current_detections[det_idx]['bbox']
+                track['keypoints'] = current_detections[det_idx]['keypoints']
+                track['scores'] = current_detections[det_idx]['scores']
+                track['age'] = 0  # 重置age
+                updated_tracks.append(track)
+                matched_detections.add(det_idx)
+                matched_tracks.add(track_idx)
+
+        # 为未匹配的检测创建新tracks
+        for i, detection in enumerate(current_detections):
+            if i not in matched_detections:
+                new_track = {
+                    'track_id': self.next_track_id,
+                    'bbox': detection['bbox'],
+                    'keypoints': detection['keypoints'],
+                    'scores': detection['scores'],
+                    'age': 0
+                }
+                updated_tracks.append(new_track)
+                self.next_track_id += 1
+
+        # 保留未匹配但还年轻的tracks
+        for j, track in enumerate(self.track_history):
+            if j not in matched_tracks:
+                track['age'] += 1
+                if track['age'] < 5:  # 保留5帧
+                    updated_tracks.append(track)
+
+        self.track_history = updated_tracks
+        return updated_tracks
+
     def inference(self, img: np.ndarray) -> Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]:
-        """对图像进行多人姿态估计
+        """对图像进行多人姿态估计和tracking
 
         Args:
             img: 输入图像，BGR格式
@@ -47,11 +199,13 @@ class MultiPersonONNXPoseEstimator:
         bboxes = self._detect_humans(img)
 
         if len(bboxes) == 0:
+            # 即使没有检测，也要更新tracking状态
+            if self.enable_tracking:
+                self._track_persons([])
             return img, [], []
 
         # 2. 批量姿态估计
-        keypoints_list = []
-        scores_list = []
+        current_detections = []
 
         for bbox in bboxes:
             # 裁剪人体区域
@@ -63,11 +217,21 @@ class MultiPersonONNXPoseEstimator:
             # 将关键点坐标转换回原图坐标系
             keypoints = self._transform_keypoints_to_original(keypoints, bbox)
 
-            keypoints_list.append(keypoints)
-            scores_list.append(scores)
+            current_detections.append({
+                'bbox': bbox[:4],  # [x1, y1, x2, y2]
+                'keypoints': keypoints,
+                'scores': scores
+            })
 
-        # 3. 可视化
-        vis_img = self._visualize_multi_person(img, keypoints_list, scores_list)
+        # 3. Tracking
+        tracked_objects = self._track_persons(current_detections)
+
+        # 4. 可视化
+        vis_img = self._visualize_multi_person_with_tracking(img, tracked_objects)
+
+        # 返回格式保持兼容
+        keypoints_list = [obj['keypoints'] for obj in tracked_objects]
+        scores_list = [obj['scores'] for obj in tracked_objects]
 
         return vis_img, keypoints_list, scores_list
 
@@ -182,62 +346,15 @@ class MultiPersonONNXPoseEstimator:
 
         return transformed_keypoints
 
-    def _visualize_multi_person(self, img: np.ndarray, keypoints_list: List[np.ndarray],
-                                scores_list: List[np.ndarray]) -> np.ndarray:
-        """可视化多人姿态
+    def _visualize_multi_person_with_tracking(self, img: np.ndarray, tracked_objects: List[Dict]) -> np.ndarray:
+        """可视化多人姿态和tracking ID - 使用Numba加速的绘制功能
 
         Args:
             img: 原始图像
-            keypoints_list: 所有人的关键点列表
-            scores_list: 所有人的关键点分数列表
+            tracked_objects: 包含tracking信息的对象列表
 
         Returns:
             可视化后的图像
         """
-        vis_img = img.copy()
-
-        # 为每个人使用不同的颜色
-        person_colors = [
-            # (255, 0, 0),  # 红
-            (0, 255, 0),  # 绿
-            # (0, 0, 255),  # 蓝
-            # (255, 255, 0),  # 黄
-            # (255, 0, 255),  # 紫
-            # (0, 255, 255),  # 青
-        ]
-
-        for person_idx, (keypoints, scores) in enumerate(zip(keypoints_list, scores_list)):
-            # 选择颜色
-            color_base = person_colors[person_idx % len(person_colors)]
-
-            # 确保keypoints是2D数组
-            if len(keypoints.shape) == 3 and keypoints.shape[0] == 1:
-                keypoints = keypoints[0]
-            if len(scores.shape) == 2 and scores.shape[0] == 1:
-                scores = scores[0]
-
-            # 绘制骨架
-            skeleton = [
-                [15, 13], [13, 11], [16, 14], [14, 12], [11, 12],
-                [5, 11], [6, 12], [5, 6], [5, 7], [6, 8], [7, 9],
-                [8, 10], [1, 2], [0, 1], [0, 2], [1, 3], [2, 4],
-                [3, 5], [4, 6]
-            ]
-
-            # 绘制连接线
-            for connection in skeleton:
-                kpt_a, kpt_b = connection
-                if kpt_a < len(keypoints) and kpt_b < len(keypoints):
-                    if scores[kpt_a] > self.pose_score_thr and scores[kpt_b] > self.pose_score_thr:
-                        pos_a = tuple(keypoints[kpt_a].astype(int))
-                        pos_b = tuple(keypoints[kpt_b].astype(int))
-                        cv2.line(vis_img, pos_a, pos_b, color_base, 2)
-
-            # 绘制关键点
-            for kpt_idx, (kpt, score) in enumerate(zip(keypoints, scores)):
-                if score > self.pose_score_thr:
-                    pos = tuple(kpt.astype(int))
-                    cv2.circle(vis_img, pos, 4, color_base, -1)
-                    cv2.circle(vis_img, pos, 5, (255, 255, 255), 1)
-
-        return vis_img
+        # 使用Numba加速的绘制函数
+        return draw_multi_person_pose_numba(img, tracked_objects, self.pose_score_thr)

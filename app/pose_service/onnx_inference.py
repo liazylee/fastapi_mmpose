@@ -288,29 +288,27 @@ class ONNXPoseEstimator:
 
         return keypoints, scores
 
-
-onnx_file = "/home/stanley/jobs/python/AI/fastapi_mmpose/app/pose_service/configs/rtmpose_onnx/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504/end2end.onnx"
-pose_estimator = ONNXPoseEstimator(onnx_file, device='cuda')
-
+# onnx_file = "/home/stanley/jobs/python/AI/fastapi_mmpose/app/pose_service/configs/rtmpose_onnx/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504/end2end.onnx"
+# pose_estimator = ONNXPoseEstimator(onnx_file, device='cuda')
 
 # 示例使用方法
-def main():
-    # 初始化ONNX推理器
-
-    # 读取图像
-    image_path = "/home/stanley/jobs/python/AI/mmpose/projects/rtmpose/examples/onnxruntime/human-pose.jpeg"
-    img = cv2.imread(image_path)
-
-    # 执行推理
-    vis_img, keypoints, scores = pose_estimator.inference(img)
-
-    # 保存结果
-    cv2.imwrite("output.jpg", vis_img)
-
-    print(f"关键点形状: {keypoints.shape}")
-    print(f"分数形状: {scores.shape}")
-
-
-if __name__ == "__main__":
-    # main()
-    pass
+# def main():
+#     # 初始化ONNX推理器
+#
+#     # 读取图像
+#     image_path = "/home/stanley/jobs/python/AI/mmpose/projects/rtmpose/examples/onnxruntime/human-pose.jpeg"
+#     img = cv2.imread(image_path)
+#
+#     # 执行推理
+#     vis_img, keypoints, scores = pose_estimator.inference(img)
+#
+#     # 保存结果
+#     cv2.imwrite("output.jpg", vis_img)
+#
+#     print(f"关键点形状: {keypoints.shape}")
+#     print(f"分数形状: {scores.shape}")
+#
+#
+# if __name__ == "__main__":
+#     # main()
+#     pass

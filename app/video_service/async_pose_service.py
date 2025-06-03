@@ -43,26 +43,78 @@ class AsyncPoseService:
         logger.info("Async pose processing pipeline started")
 
     async def stop_pipeline(self):
-        """正确停止pipeline"""
+        """正确停止pipeline并清理所有内存"""
         logger.info("Stopping async pose processing pipeline...")
 
         self.running = False
         self._shutdown_event.set()
 
-        # 取消所有任务
+        # 1. 取消所有任务
+        cancelled_tasks = 0
         for task in self.tasks:
             if not task.done():
                 task.cancel()
+                cancelled_tasks += 1
 
-        # 等待任务完成
+        # 2. 等待任务完成
         if self.tasks:
             try:
                 await asyncio.gather(*self.tasks, return_exceptions=True)
             except Exception as e:
                 logger.warning(f"Error during pipeline shutdown: {e}")
 
+        logger.info(f"Cancelled {cancelled_tasks} pipeline tasks")
+
+        # 3. 清理所有队列中的未处理frames
+        if hasattr(self.frame_buffer, 'cleanup_all_queues'):
+            await self.frame_buffer.cleanup_all_queues()
+
+        # 4. 重置tracking历史数据
+        if hasattr(self.processor, 'reset_tracking'):
+            self.processor.reset_tracking()
+
+        # 5. 清理多人姿态估计器的tracking历史
+        if hasattr(self.processor, 'pose_estimator') and hasattr(self.processor.pose_estimator, 'reset_tracking'):
+            self.processor.pose_estimator.reset_tracking()
+
+        # 6. 清理GPU内存
+        await self._cleanup_gpu_memory()
+
+        # 7. 重置统计信息
+        self.stats = {
+            'frames_processed': 0,
+            'total_latency': 0,
+            'batch_efficiency': 0
+        }
+
         self.tasks.clear()
-        logger.info("Async pose processing pipeline stopped")
+        logger.info("Async pose processing pipeline stopped and memory cleaned")
+
+    async def _cleanup_gpu_memory(self):
+        """清理GPU内存"""
+        try:
+            import gc
+            import torch
+            
+            # 强制垃圾回收
+            gc.collect()
+            
+            # 清理CUDA缓存
+            if torch.cuda.is_available():
+                current_device = torch.cuda.current_device()
+                memory_before = torch.cuda.memory_allocated(current_device) / 1024**2  # MB
+                
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+                memory_after = torch.cuda.memory_allocated(current_device) / 1024**2  # MB
+                freed_memory = memory_before - memory_after
+                
+                logger.info(f"GPU memory cleanup - Before: {memory_before:.1f}MB, After: {memory_after:.1f}MB, Freed: {freed_memory:.1f}MB")
+            
+        except Exception as e:
+            logger.warning(f"GPU memory cleanup failed: {e}")
+
 
     async def _performance_monitor(self):
         """改进的性能监控，支持优雅关闭"""
