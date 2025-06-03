@@ -3,7 +3,7 @@ import time
 from logging import getLogger
 
 from app.config import BatchProcessingConfig, batch_settings
-from app.video_service.batch_GPU_process import BatchPoseProcessor
+from app.video_service.batch_GPU_process_onnx import BatchPoseProcessorONNX
 from app.video_service.manage_frame import FrameBuffer
 
 logger = getLogger(__name__)
@@ -15,7 +15,7 @@ class AsyncPoseService:
     def __init__(self, config: BatchProcessingConfig = None):
         self.config = config or batch_settings
         self.frame_buffer = FrameBuffer(self.config)
-        self.processor = BatchPoseProcessor(self.config)
+        self.processor = BatchPoseProcessorONNX(self.config)
         self._shutdown_event = asyncio.Event()
         # Pipeline control
         self.running = False
@@ -167,3 +167,6 @@ class AsyncPoseService:
         except asyncio.TimeoutError:
             logger.warning("Frame processing timeout")
             return frame, None  # Return original frame
+
+
+async_pose_service = AsyncPoseService()

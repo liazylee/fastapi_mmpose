@@ -4,7 +4,7 @@ from aiortc import VideoStreamTrack
 from av import VideoFrame
 
 from app.config import batch_settings
-from app.video_service.async_pose_service import AsyncPoseService
+from app.video_service.async_pose_service import async_pose_service
 from app.video_service.permance_monitor import monitor
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class VideoTransformTrack(VideoStreamTrack):
         self.config = config or batch_settings
 
         # Use async pose service
-        self.pose_service = AsyncPoseService(self.config)
+        self.pose_service = async_pose_service
 
     async def recv(self):
         monitor.start_frame()

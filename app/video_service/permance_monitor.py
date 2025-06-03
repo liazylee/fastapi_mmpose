@@ -109,7 +109,7 @@ class PerformanceMonitor:
         ║                    PERFORMANCE MONITOR                    ║
         ╠═══════════════════════════════════════════════════════════╣
         ║ Instantaneous FPS: {instantaneous_fps:>6.1f}                           ║
-        ║ Cumulative FPS:    {cumulative_fps:>6.1f}                           ║  
+        ║ Cumulative FPS:    {cumulative_fps:>6.1f}                           ║
         ║ Theoretical FPS:   {theoretical_fps:>6.1f}                           ║
         ║ Total Frames:      {self.frame_count:>6}                           ║
         ║                                                           ║

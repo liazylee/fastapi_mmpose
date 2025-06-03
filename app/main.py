@@ -10,9 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from app.api.v1.api import api_router
+# from app.api.v1.api import api_router
 from app.config import settings
-from app.video_service.video_process import pcs, VideoTransformTrack
+from app.video_service import VideoTransformTrack
+from app.video_service.video_process import pcs
 
 # 启用日志
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +44,7 @@ app.add_middleware(
 )
 
 # Include API router
-app.include_router(api_router, prefix=settings.API_V1_STR)
+# app.include_router(api_router, prefix=settings.API_V1_STR)
 # 挂载 uploads 路由
 app.mount(
     "/uploads",
@@ -100,12 +101,15 @@ async def offer(request: Request):
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
         logger.info(f"Connection state is {pc.connectionState}")
-        if pc.connectionState == "failed" or pc.connectionState == "closed":
-            # 清理 MediaPlayer 资源
+        if pc.connectionState in ("failed", "closed"):
+            # 停止并清理 MediaPlayer
             if hasattr(pc, "_player") and pc._player:
-                logger.info("Closing MediaPlayer")
-                pc._player._stop()
-                del pc._player
+                logger.info("Stopping MediaPlayer tracks")
+                if pc._player.audio:
+                    pc._player.audio.stop()
+                if pc._player.video:
+                    pc._player.video.stop()
+                pc._player = None
             await pc.close()
             pcs.discard(pc)
 

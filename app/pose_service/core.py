@@ -10,7 +10,8 @@ from mmpose.structures import merge_data_samples  # noqa
 from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import settings
-from app.video_service.helper import timeit
+
+# from app.video_service.helper import timeit
 
 keypoint_colors = [
     (255, 0, 0),  # 0: nose
@@ -83,15 +84,11 @@ class PoseService:
             skeleton_style='mmpose'
         )
 
-    @timeit
+    # @timeit
     def _draw_poses_manually(self, image, pose_results):
         """手动绘制关键点，作为备用方案"""
         vis_img = image.copy()
 
-        # COCO 17关键点的骨架连接 (如果获取不到dataset_meta中的skeleton)
-        # 这是标准的COCO-17关键点连接关系
-
-        # 尝试获取骨架连接信息
         skeleton = self.pose_estimator.dataset_meta.get('skeleton_info', {}).get('skeleton', default_skeleton)
         if not skeleton:
             skeleton = default_skeleton
@@ -144,7 +141,7 @@ class PoseService:
                                     connections_drawn += 1
         return vis_img
 
-    @timeit
+    # @timeit
     def process_image(self, image):
         """
         Process a single image through detection and pose estimation pipeline.
@@ -177,49 +174,6 @@ class PoseService:
         # 2. Pose estimation
 
         pose_results = inference_topdown(self.pose_estimator, image, bboxes)
-
-        # data_samples = merge_data_samples(pose_results)
-        # Method 1: Use add_datasample
-
-        # start_time = time.time()
-        # for pose_result in pose_results:
-        #     self.visualizer.add_datasample(
-        #         'result',
-        #         image,
-        #         data_sample=pose_result,
-        #         draw_gt=False,
-        #         draw_bbox=True,
-        #         draw_heatmap=False,
-        #         skeleton_style='mmpose',
-        #         wait_time=0,
-        #         kpt_thr=0.3,
-        #         show=False,
-        #     )
-
-        # self.visualizer.add_datasample(
-        #     'result',
-        #     image,
-        #     data_sample=pose_results,
-        #     draw_gt=False,
-        #     draw_heatmap=False,  # Do not draw heatmap
-        #     draw_bbox=True,
-        #     show_kpt_idx=True,
-        #     skeleton_style='mmpose',
-        #     show=False,
-        #     wait_time=0,
-        #     kpt_thr=0.3
-        # )
-        # end_time = time.time()
-        # print(f"Function  executed in {end_time - start_time:.4f} seconds")
-        # vis_img = self.visualizer.get_image()
-        #
-        # if vis_img is not None and not np.array_equal(vis_img, image):
-        #
-        #     return vis_img, pose_results
-        # else:
-        #     print("Visualization failed with official visualizer, falling back to manual drawing...")
-
-        # Fallback: manual drawing
 
         vis_img = self._draw_poses_manually(image, pose_results)
         return vis_img, pose_results
