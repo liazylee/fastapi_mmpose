@@ -4,6 +4,7 @@ import asyncio
 import os
 from logging import getLogger
 from typing import List, Tuple
+from app.pose_service.yolo_detector import YOLODetector, YOLODetectorAdapter
 
 import cv2
 import numpy as np
@@ -49,13 +50,17 @@ class BatchPoseProcessorONNX:
 
     def _init_detector(self):
         """初始化人体检测器"""
-        self.detector = init_detector(
-            settings.DETECTOR_CONFIG,
-            settings.DETECTOR_CHECKPOINT,
-            device=self.device
-        )
-        self.detector.cfg = adapt_mmdet_pipeline(self.detector.cfg)
-        logger.info("Human detector initialized")
+        if self.config.use_yolo_detector:
+            yolo_detector = YOLODetector(self.config.yolo_model_path, self.device, self.config.det_score_thr)
+            self.detector = YOLODetectorAdapter(yolo_detector)
+        else:
+            self.detector = init_detector(
+                settings.DETECTOR_CONFIG,
+                settings.DETECTOR_CHECKPOINT,
+                device=self.device
+            )
+            self.detector.cfg = adapt_mmdet_pipeline(self.detector.cfg)
+            logger.info("mmdet detector initialized")
 
     def _warm_up_models(self):
         """Warm up models with dummy batch"""

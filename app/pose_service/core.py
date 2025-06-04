@@ -179,5 +179,4 @@ class PoseService:
         return vis_img, pose_results
         # Create a singleton instance
 
-
-pose_service = PoseService()
+# pose_service = PoseService()

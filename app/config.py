@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     ALPHA: float = 0.8
     LINE_WIDTH: int = 1
     det_cat_id: int = 0  # Category ID for person detection
-    bbox_thr: float = 0.4  # Threshold for bounding box confidence
+    bbox_thr: float = 0.5  # Threshold for bounding box confidence
     nms_thr: float = 0.4  # IoU threshold for NMS
     FPS: int = 30  # Default FPS for video processing
     WORKERS: int = os.cpu_count() or 4  # Number of CPU workers
@@ -61,12 +61,19 @@ class BatchProcessingConfig:
     input_resolution: tuple = (1920, 1080)  # Input resolution for video processing
     detection_batch_size: int = 16  # Can differ from pose batch size
     pose_batch_size: int = 10
-    det_score_thr: float = 0.3
-    pose_score_thr: float = 0.3
+    det_score_thr: float = 0.4
+    pose_score_thr: float = 0.5
     max_track_age: int = 60
     iou_threshold: float = 0.5
     onnx_path = os.path.join(PROJECT_ROOT,
                              "pose_service/configs/rtmpose_onnx/end2end.onnx")
+
+    # YOLO Detection settings
+    use_yolo_detector: bool = False  # 是否使用YOLO检测器
+    yolo_model_path: str = os.path.join(PROJECT_ROOT,
+                                        "pose_service/configs/best.onnx")  # YOLO模型文件路径(.pt or onnx文件)
+    use_yolo_tracking: bool = True  # 是否使用YOLO内置tracking功能
+    yolo_conf_threshold: float = 0.5  # YOLO置信度阈值
 
 
 batch_settings: BatchProcessingConfig = BatchProcessingConfig()

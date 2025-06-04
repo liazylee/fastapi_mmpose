@@ -70,8 +70,9 @@ class ONNXPoseEstimator:
         resized_img, scale = self.top_down_affine(self.model_input_size, scale, center, img)
 
         # 归一化图像
-        mean = np.array([123.675, 116.28, 103.53])
-        std = np.array([58.395, 57.12, 57.375])
+        mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+        std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+        resized_img = resized_img.astype(np.float32)  # 确保为float32
         resized_img = (resized_img - mean) / std
 
         return resized_img, center, scale
@@ -101,19 +102,21 @@ class ONNXPoseEstimator:
         Returns:
             批量输出列表
         """
-        # 转换为 [N, C, H, W] 格式
+        # 确保输入数据类型为float32
         batch_imgs = batch_imgs.astype(np.float32)
+        
+        # 转换为 [N, C, H, W] 格式
         input_tensor = batch_imgs.transpose(0, 3, 1, 2)
-
+        
         # 构建输入
         sess_input = {self.sess.get_inputs()[0].name: input_tensor}
         sess_output = []
         for out in self.sess.get_outputs():
             sess_output.append(out.name)
-
+        
         # 运行模型
         outputs = self.sess.run(sess_output, sess_input)
-
+        
         return outputs
 
     def postprocess(self, outputs: List[np.ndarray], model_input_size: Tuple[int, int],
@@ -182,7 +185,7 @@ class ONNXPoseEstimator:
                 if u < keypoints_num and v < keypoints_num \
                         and score[u] > thr and score[v] > thr:
                     cv2.line(vis_img, tuple(kpts[u].astype(np.int32)),
-                             tuple(kpts[v].astype(np.int32)), palette[color], 2,
+                             tuple(kpts[v].astype(np.int32)), palette[color], 1,
                              cv2.LINE_AA)
 
         return vis_img

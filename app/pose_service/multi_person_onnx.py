@@ -1,7 +1,7 @@
 # app/pose_service/multi_person_onnx.py
 
 import logging
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional, Union
 
 import numpy as np
 from mmdet.apis import inference_detector
@@ -9,12 +9,14 @@ from mmdet.apis import inference_detector
 from app.config import batch_settings
 from app.pose_service.draw_pose_numba import draw_multi_person_pose_numba
 from app.pose_service.onnx_inference import ONNXPoseEstimator
+from app.pose_service.iou_tracker import IoUTracker
+from app.pose_service.yolo_detector import YOLODetector, YOLODetectorAdapter
 
 logger = logging.getLogger(__name__)
 
 
 class MultiPersonONNXPoseEstimator:
-    """多人姿态估计器，结合MMDetection检测器和ONNX姿态模型，支持tracking"""
+    """多人姿态估计器，结合检测器和ONNX姿态模型，支持tracking"""
 
     def __init__(self, onnx_file: str, device: str = 'cuda', batch_setting: batch_settings = batch_settings):
         """初始化多人姿态估计器
@@ -22,169 +24,81 @@ class MultiPersonONNXPoseEstimator:
         Args:
             onnx_file: ONNX模型文件路径
             device: 推理设备
+            batch_setting: 批处理设置
         """
         self.device = device
         self.pose_estimator = ONNXPoseEstimator(onnx_file, device)
         self.detector = None  # 将在外部设置
         self.settings = batch_setting or batch_settings
+        
         # 检测和姿态估计的阈值
         self.det_score_thr = self.settings.det_score_thr
         self.pose_score_thr = self.settings.pose_score_thr
 
-        # Tracking相关
+        # Tracking相关 - 使用独立的IoU tracker
         self.enable_tracking = True
-        self.track_history = []  # 存储历史tracks
-        self.next_track_id = 1
-        self.max_track_age = self.settings.max_track_age  # tracks的最大保留帧数
-        self.iou_threshold = self.settings.iou_threshold  # IoU阈值用于tracking
+        self.iou_tracker = IoUTracker(
+            max_track_age=self.settings.max_track_age,
+            iou_threshold=self.settings.iou_threshold
+        )
+        
+        # 检测器类型标识
+        self.detector_type = 'mmdet'  # 'mmdet' 或 'yolo'
+        self.use_yolo_tracking = False  # 是否使用YOLO内置tracking
 
     def set_detector(self, detector):
-        """设置人体检测器"""
+        """设置检测器（支持MMDetection或YOLO）"""
         self.detector = detector
+        
+        # 判断检测器类型
+        if hasattr(detector, 'yolo_detector'):
+            self.detector_type = 'yolo'
+            logger.info("Using YOLO detector with built-in tracking")
+        else:
+            self.detector_type = 'mmdet'
+            logger.info("Using MMDetection detector")
+
+    def set_yolo_detector(self, yolo_model_path: str, use_yolo_tracking: bool = True):
+        """设置YOLO检测器
+        
+        Args:
+            yolo_model_path: YOLO模型文件路径
+            use_yolo_tracking: 是否使用YOLO内置tracking功能
+        """
+        try:
+            yolo_detector = YOLODetector(yolo_model_path, self.device, self.det_score_thr)
+            self.detector = YOLODetectorAdapter(yolo_detector)
+            self.detector_type = 'yolo'
+            self.use_yolo_tracking = use_yolo_tracking
+            
+            # 如果使用YOLO tracking，禁用IoU tracker
+            if use_yolo_tracking:
+                self.iou_tracker.set_tracking_enabled(False)
+            
+            logger.info(f"YOLO detector set with tracking={'enabled' if use_yolo_tracking else 'disabled'}")
+            
+        except Exception as e:
+            logger.error(f"Failed to set YOLO detector: {e}")
+            raise
 
     def reset_tracking(self):
         """重置tracking状态并清理内存"""
-        logger.info(f"Resetting tracking - clearing {len(self.track_history)} track objects")
-
-        # 清理tracking历史数据
-        for track in self.track_history:
-            # 清理numpy数组数据
-            if 'keypoints' in track:
-                track['keypoints'] = None
-            if 'scores' in track:
-                track['scores'] = None
-            if 'bbox' in track:
-                track['bbox'] = None
-            track.clear()
-
-        self.track_history.clear()
-        self.next_track_id = 1
-
-        # 强制垃圾回收
-        import gc
-        gc.collect()
-
-        logger.info("Tracking reset completed with memory cleanup")
+        if self.detector_type == 'yolo' and hasattr(self.detector, 'yolo_detector'):
+            self.detector.yolo_detector.reset_tracking()
+        
+        self.iou_tracker.reset_tracking()
+        logger.info("All tracking states reset")
 
     def set_tracking_enabled(self, enabled: bool = True):
         """启用/禁用tracking"""
         self.enable_tracking = enabled
-        if not enabled:
-            self.reset_tracking()
-
-    def _compute_iou(self, bbox1, bbox2):
-        """计算两个边界框的IoU"""
-        x1 = max(bbox1[0], bbox2[0])
-        y1 = max(bbox1[1], bbox2[1])
-        x2 = min(bbox1[2], bbox2[2])
-        y2 = min(bbox1[3], bbox2[3])
-
-        if x2 <= x1 or y2 <= y1:
-            return 0.0
-
-        intersection = (x2 - x1) * (y2 - y1)
-        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-        union = area1 + area2 - intersection
-
-        return intersection / union if union > 0 else 0.0
-
-    def _track_persons(self, current_detections) -> List[Dict]:
-        """基于IoU的简单tracking算法"""
-        if not self.enable_tracking:
-            # 如果不启用tracking，每个检测都分配新ID
-            tracked_objects = []
-            for i, detection in enumerate(current_detections):
-                tracked_objects.append({
-                    'track_id': i + 1,
-                    'bbox': detection['bbox'],
-                    'keypoints': detection['keypoints'],
-                    'scores': detection['scores'],
-                    'age': 0
-                })
-            return tracked_objects
-
-        # 如果没有历史tracks，初始化
-        if not self.track_history:
-            tracked_objects = []
-            for detection in current_detections:
-                tracked_objects.append({
-                    'track_id': self.next_track_id,
-                    'bbox': detection['bbox'],
-                    'keypoints': detection['keypoints'],
-                    'scores': detection['scores'],
-                    'age': 0
-                })
-                self.next_track_id += 1
-            self.track_history = tracked_objects
-            return tracked_objects
-
-        # 计算IoU矩阵
-        n_detections = len(current_detections)
-        n_tracks = len(self.track_history)
-
-        if n_detections == 0:
-            # 没有新检测，增加所有tracks的age
-            for track in self.track_history:
-                track['age'] += 1
-            # 移除过老的tracks
-            self.track_history = [track for track in self.track_history if track['age'] < self.max_track_age]
-            return self.track_history
-
-        iou_matrix = np.zeros((n_detections, n_tracks))
-        for i, detection in enumerate(current_detections):
-            for j, track in enumerate(self.track_history):
-                iou_matrix[i, j] = self._compute_iou(detection['bbox'], track['bbox'])
-
-        # 贪心匹配：按IoU从大到小匹配
-        matched_detections = set()
-        matched_tracks = set()
-        updated_tracks = []
-
-        # 找到所有IoU > threshold的匹配
-        matches = []
-        for i in range(n_detections):
-            for j in range(n_tracks):
-                if iou_matrix[i, j] > self.iou_threshold:
-                    matches.append((i, j, iou_matrix[i, j]))
-
-        matches.sort(key=lambda x: x[2], reverse=True)
-
-        # 进行匹配
-        for det_idx, track_idx, iou_score in matches:
-            if det_idx not in matched_detections and track_idx not in matched_tracks:
-                # 更新现有track
-                track = self.track_history[track_idx]
-                track['bbox'] = current_detections[det_idx]['bbox']
-                track['keypoints'] = current_detections[det_idx]['keypoints']
-                track['scores'] = current_detections[det_idx]['scores']
-                track['age'] = 0  # 重置age
-                updated_tracks.append(track)
-                matched_detections.add(det_idx)
-                matched_tracks.add(track_idx)
-
-        # 为未匹配的检测创建新tracks
-        for i, detection in enumerate(current_detections):
-            if i not in matched_detections:
-                new_track = {
-                    'track_id': self.next_track_id,
-                    'bbox': detection['bbox'],
-                    'keypoints': detection['keypoints'],
-                    'scores': detection['scores'],
-                    'age': 0
-                }
-                updated_tracks.append(new_track)
-                self.next_track_id += 1
-
-        # 保留未匹配但还年轻的tracks
-        for j, track in enumerate(self.track_history):
-            if j not in matched_tracks:
-                track['age'] += 1
-                if track['age'] < 5:  # 保留5帧
-                    updated_tracks.append(track)
-
-        self.track_history = updated_tracks
-        return updated_tracks
+        
+        if self.detector_type == 'yolo' and hasattr(self.detector, 'set_tracking_enabled'):
+            self.detector.set_tracking_enabled(enabled and self.use_yolo_tracking)
+        
+        self.iou_tracker.set_tracking_enabled(enabled and not self.use_yolo_tracking)
+        
+        logger.info(f"Tracking {'enabled' if enabled else 'disabled'}")
 
     def inference(self, img: np.ndarray) -> Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]:
         """对图像进行多人姿态估计和tracking
@@ -195,22 +109,39 @@ class MultiPersonONNXPoseEstimator:
         Returns:
             tuple: (可视化图像, 关键点列表, 分数列表)
         """
-        # 1. 人体检测
-        bboxes = self._detect_humans(img)
+        # 1. 人体检测（可能包含tracking）
+        if self.detector_type == 'yolo' and self.use_yolo_tracking:
+            # 使用YOLO内置tracking
+            bboxes, yolo_track_ids = self._detect_humans_yolo_with_tracking(img)
+        else:
+            # 使用普通检测
+            bboxes = self._detect_humans(img)
+            yolo_track_ids = None
 
         if len(bboxes) == 0:
             # 即使没有检测，也要更新tracking状态
-            if self.enable_tracking:
-                self._track_persons([])
+            if self.enable_tracking and not self.use_yolo_tracking:
+                self.iou_tracker.track_persons([])
             return img, [], []
 
         # 2. 批量姿态估计
         current_detections = self._batch_pose_estimation(img, bboxes)
 
-
-
-        # 3. Tracking
-        tracked_objects = self._track_persons(current_detections)
+        # 3. Tracking处理
+        if self.use_yolo_tracking and yolo_track_ids:
+            # 使用YOLO提供的track ID
+            tracked_objects = []
+            for detection, track_id in zip(current_detections, yolo_track_ids):
+                tracked_objects.append({
+                    'track_id': track_id,
+                    'bbox': detection['bbox'],
+                    'keypoints': detection['keypoints'],
+                    'scores': detection['scores'],
+                    'age': 0
+                })
+        else:
+            # 使用IoU tracker
+            tracked_objects = self.iou_tracker.track_persons(current_detections)
 
         # 4. 可视化
         vis_img = self._visualize_multi_person_with_tracking(img, tracked_objects)
@@ -220,10 +151,9 @@ class MultiPersonONNXPoseEstimator:
         scores_list = [obj['scores'] for obj in tracked_objects]
 
         return vis_img, keypoints_list, scores_list
-    
-    def _batch_pose_estimation(self, img: np.ndarray, bboxes: List[np.ndarray]) -> List[Dict]:
-        """批量姿态估计"""
 
+    def _batch_pose_estimation(self, img: np.ndarray, bboxes: List[np.ndarray]) -> List[Dict]:
+        """批量姿态估计，一次性处理多个人"""
         if len(bboxes) == 0:
             return []
         
@@ -231,16 +161,20 @@ class MultiPersonONNXPoseEstimator:
         batch_person_imgs = []
         batch_centers = []
         batch_scales = []
+        
         for bbox in bboxes:
             person_img = self._crop_person(img, bbox)
             # 预处理单个图像
             resized_img, center, scale = self.pose_estimator.preprocess(person_img)
-            resized_img=resized_img.astype(np.float32)
+            
+            # 确保数据类型为float32
+            resized_img = resized_img.astype(np.float32)
+            
             batch_person_imgs.append(resized_img)
             batch_centers.append(center)
             batch_scales.append(scale)
 
-         # 2. 构建batch输入
+        # 2. 构建batch输入
         batch_input = np.stack(batch_person_imgs, axis=0)  # Shape: [N, H, W, C]
         
         # 3. 批量ONNX推理
@@ -270,10 +204,31 @@ class MultiPersonONNXPoseEstimator:
             })
         
         return current_detections
+
+    def _detect_humans_yolo_with_tracking(self, img: np.ndarray) -> Tuple[List[np.ndarray], List[int]]:
+        """使用YOLO进行检测和tracking
         
+        Returns:
+            tuple: (人体边界框列表, track_id列表)
+        """
+        if self.detector is None:
+            logger.warning("检测器未设置")
+            h, w = img.shape[:2]
+            return [np.array([0, 0, w, h, 1.0])], [1]
+
+        try:
+            if hasattr(self.detector, 'yolo_detector'):
+                bboxes, track_ids = self.detector.yolo_detector.detect_and_track(img)
+                return bboxes, track_ids
+            else:
+                logger.warning("YOLO detector not properly configured")
+                return [], []
+        except Exception as e:
+            logger.error(f"YOLO detection/tracking failed: {e}")
+            return [], []
 
     def _detect_humans(self, img: np.ndarray) -> List[np.ndarray]:
-        """检测图像中的人体
+        """检测图像中的人体（不包含tracking）
 
         Returns:
             人体边界框列表 [[x1, y1, x2, y2, score], ...]
@@ -284,9 +239,20 @@ class MultiPersonONNXPoseEstimator:
             h, w = img.shape[:2]
             return [np.array([0, 0, w, h, 1.0])]
 
-        # 使用MMDetection进行检测
-        result = inference_detector(self.detector, img)
+        if self.detector_type == 'yolo':
+            # 使用YOLO检测器（不带tracking）
+            if hasattr(self.detector, 'yolo_detector'):
+                return self.detector.yolo_detector.detect_only(img)
+            else:
+                result = self.detector(img)
+                return self._extract_bboxes_from_yolo_result(result)
+        else:
+            # 使用MMDetection进行检测
+            result = inference_detector(self.detector, img)
+            return self._extract_bboxes_from_mmdet_result(result)
 
+    def _extract_bboxes_from_mmdet_result(self, result) -> List[np.ndarray]:
+        """从MMDetection结果中提取边界框"""
         # 提取人体类别的检测结果（COCO中人是第0类）
         if hasattr(result, 'pred_instances'):
             # MMDetection v3.x格式
@@ -309,6 +275,21 @@ class MultiPersonONNXPoseEstimator:
             person_bboxes = [bbox for bbox in bboxes if bbox[4] > self.det_score_thr]
 
         return person_bboxes
+
+    def _extract_bboxes_from_yolo_result(self, result) -> List[np.ndarray]:
+        """从YOLO结果中提取边界框"""
+        if hasattr(result, 'pred_instances'):
+            instances = result.pred_instances
+            if hasattr(instances, 'bboxes') and len(instances.bboxes) > 0:
+                bboxes = instances.bboxes
+                scores = instances.scores
+                # 组合边界框和分数
+                person_bboxes = []
+                for bbox, score in zip(bboxes, scores):
+                    if score > self.det_score_thr:
+                        person_bboxes.append(np.append(bbox, score))
+                return person_bboxes
+        return []
 
     def _crop_person(self, img: np.ndarray, bbox: np.ndarray) -> np.ndarray:
         """根据边界框裁剪人体区域
