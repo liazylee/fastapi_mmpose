@@ -40,6 +40,8 @@ class Settings(BaseSettings):
 @dataclass
 class BatchProcessingConfig:
     device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    PROJECT_ROOT: ClassVar[str] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     # Batch settings
     batch_size: int = 16
     max_queue_size: int = 50
@@ -49,16 +51,22 @@ class BatchProcessingConfig:
     num_workers: int = os.cpu_count() or 4  # Separate threads for different stages
     gpu_streams: int = 40  # CUDA streams for parallel processing
 
-    # Performance settings
-    prefetch_factor: int = 20
-    pin_memory: bool = True
-    non_blocking: bool = True
+    # # Performance settings
+    # prefetch_factor: int = 20
+    # pin_memory: bool = True
+    # non_blocking: bool = True
 
     # Model settings
     enable_tensorrt: bool = False  # Toggle for future TensorRT
     input_resolution: tuple = (1920, 1080)  # Input resolution for video processing
     detection_batch_size: int = 16  # Can differ from pose batch size
     pose_batch_size: int = 10
+    det_score_thr: float = 0.3
+    pose_score_thr: float = 0.3
+    max_track_age: int = 60
+    iou_threshold: float = 0.5
+    onnx_path = os.path.join(PROJECT_ROOT,
+                             "pose_service/configs/rtmpose_onnx/end2end.onnx")
 
 
 batch_settings: BatchProcessingConfig = BatchProcessingConfig()

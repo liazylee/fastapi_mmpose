@@ -92,6 +92,30 @@ class ONNXPoseEstimator:
 
         return outputs
 
+    def run_inference_batch(self, batch_imgs: np.ndarray) -> List[np.ndarray]:
+        """批量运行ONNX推理
+
+        Args:
+            batch_imgs: 批量图像，形状为 [N, H, W, C]
+
+        Returns:
+            批量输出列表
+        """
+        # 转换为 [N, C, H, W] 格式
+        batch_imgs = batch_imgs.astype(np.float32)
+        input_tensor = batch_imgs.transpose(0, 3, 1, 2)
+
+        # 构建输入
+        sess_input = {self.sess.get_inputs()[0].name: input_tensor}
+        sess_output = []
+        for out in self.sess.get_outputs():
+            sess_output.append(out.name)
+
+        # 运行模型
+        outputs = self.sess.run(sess_output, sess_input)
+
+        return outputs
+
     def postprocess(self, outputs: List[np.ndarray], model_input_size: Tuple[int, int],
                     center: np.ndarray, scale: np.ndarray, simcc_split_ratio: float = 2.0
                     ) -> Tuple[np.ndarray, np.ndarray]:

@@ -1,6 +1,7 @@
 # app/video_service/batch_GPU_process_onnx.py
 
 import asyncio
+import os
 from logging import getLogger
 from typing import List, Tuple
 
@@ -18,7 +19,7 @@ logger = getLogger(__name__)
 class BatchPoseProcessorONNX:
     """Optimized batch processing with ONNX pose estimator with tracking support"""
 
-    def __init__(self, config=None, onnx_file: str = None):
+    def __init__(self, config=None):
         self.config = config or batch_settings
         self.device = self.config.device or 'cuda:0'
 
@@ -26,8 +27,8 @@ class BatchPoseProcessorONNX:
         self._init_detector()
 
         # Initialize ONNX-based multi-person pose estimator with tracking
-        self.onnx_file = onnx_file or self._get_default_onnx_path()
-        self.pose_estimator = MultiPersonONNXPoseEstimator(self.onnx_file, self.device)
+        self.onnx_path = self._get_default_onnx_path()
+        self.pose_estimator = MultiPersonONNXPoseEstimator(self.onnx_path, self.device)
         self.pose_estimator.set_detector(self.detector)
 
         # Warm up models
@@ -36,7 +37,15 @@ class BatchPoseProcessorONNX:
 
     def _get_default_onnx_path(self) -> str:
         """Get default ONNX model path"""
-        return "/home/stanley/jobs/python/AI/fastapi_mmpose/app/pose_service/configs/rtmpose_onnx/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504/end2end.onnx"
+        if self.config.onnx_path and os.path.exists(self.config.onnx_path):
+            return self.config.onnx_path
+        PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # search the onnx file in the app/pose_service/configs/ directory
+        onnx_file = os.path.join(PROJECT_ROOT,
+                                 "pose_service/configs/rtmpose_onnx/")
+        for file in os.listdir(onnx_file):
+            if file.endswith(".onnx"):
+                return os.path.join(onnx_file, file)
 
     def _init_detector(self):
         """初始化人体检测器"""
@@ -91,10 +100,10 @@ class BatchPoseProcessorONNX:
                 frame = item['frame']
 
                 # Ensure frame is in correct format
-                processed_frame = self._ensure_frame_format(frame)
+                # processed_frame = self._ensure_frame_format(frame)
 
                 # Process with multi-person ONNX estimator (now with tracking)
-                vis_img, keypoints_list, scores_list = self.pose_estimator.inference(processed_frame)
+                vis_img, keypoints_list, scores_list = self.pose_estimator.inference(frame)
 
                 # Format results to match expected interface
                 pose_results = self._format_pose_results(keypoints_list, scores_list)

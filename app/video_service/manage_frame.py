@@ -1,8 +1,8 @@
 import asyncio
-import time
-import uuid
 import gc
 import logging
+import time
+import uuid
 
 from app.config import batch_settings
 
@@ -15,7 +15,7 @@ class FrameBuffer:
     def __init__(self, config=batch_settings):
         self.config = config
         self.input_queue = asyncio.Queue(maxsize=config.max_queue_size)
-        self.batch_queue = asyncio.Queue(maxsize=4)
+        self.batch_queue = asyncio.Queue(maxsize=config.max_queue_size)
         self.result_queue = asyncio.Queue(maxsize=config.max_queue_size)
 
         # Batch formation
@@ -75,12 +75,12 @@ class FrameBuffer:
     async def cleanup_all_queues(self):
         """清理所有队列中的未处理frames"""
         logger.info("Starting comprehensive queue cleanup...")
-        
+
         # 记录清理前的统计
         input_count = self.input_queue.qsize()
         batch_count = self.batch_queue.qsize()
         result_count = self.result_queue.qsize()
-        
+
         logger.info(f"Queue sizes before cleanup - Input: {input_count}, Batch: {batch_count}, Result: {result_count}")
 
         # 1. 清理input_queue
@@ -129,8 +129,9 @@ class FrameBuffer:
         # 4. 清理当前批次
         await self._cleanup_current_batch()
 
-        logger.info(f"Queue cleanup completed - Cleaned {cleaned_input} input frames, {cleaned_batch} batch frames, {cleaned_result} result items")
-        
+        logger.info(
+            f"Queue cleanup completed - Cleaned {cleaned_input} input frames, {cleaned_batch} batch frames, {cleaned_result} result items")
+
         # 5. 强制垃圾回收
         gc.collect()
         logger.info("Forced garbage collection completed")

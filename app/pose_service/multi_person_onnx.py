@@ -3,12 +3,12 @@
 import logging
 from typing import List, Tuple, Dict
 
-import cv2
 import numpy as np
 from mmdet.apis import inference_detector
 
-from app.pose_service.onnx_inference import ONNXPoseEstimator
+from app.config import batch_settings
 from app.pose_service.draw_pose_numba import draw_multi_person_pose_numba
+from app.pose_service.onnx_inference import ONNXPoseEstimator
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class MultiPersonONNXPoseEstimator:
     """多人姿态估计器，结合MMDetection检测器和ONNX姿态模型，支持tracking"""
 
-    def __init__(self, onnx_file: str, device: str = 'cuda'):
+    def __init__(self, onnx_file: str, device: str = 'cuda', batch_setting: batch_settings = batch_settings):
         """初始化多人姿态估计器
 
         Args:
@@ -26,17 +26,17 @@ class MultiPersonONNXPoseEstimator:
         self.device = device
         self.pose_estimator = ONNXPoseEstimator(onnx_file, device)
         self.detector = None  # 将在外部设置
-
+        self.settings = batch_setting or batch_settings
         # 检测和姿态估计的阈值
-        self.det_score_thr = 0.5
-        self.pose_score_thr = 0.3
+        self.det_score_thr = self.settings.det_score_thr
+        self.pose_score_thr = self.settings.pose_score_thr
 
         # Tracking相关
         self.enable_tracking = True
         self.track_history = []  # 存储历史tracks
         self.next_track_id = 1
-        self.max_track_age = 10  # tracks的最大保留帧数
-        self.iou_threshold = 0.5  # IoU阈值用于tracking
+        self.max_track_age = self.settings.max_track_age  # tracks的最大保留帧数
+        self.iou_threshold = self.settings.iou_threshold  # IoU阈值用于tracking
 
     def set_detector(self, detector):
         """设置人体检测器"""
@@ -45,7 +45,7 @@ class MultiPersonONNXPoseEstimator:
     def reset_tracking(self):
         """重置tracking状态并清理内存"""
         logger.info(f"Resetting tracking - clearing {len(self.track_history)} track objects")
-        
+
         # 清理tracking历史数据
         for track in self.track_history:
             # 清理numpy数组数据
@@ -56,14 +56,14 @@ class MultiPersonONNXPoseEstimator:
             if 'bbox' in track:
                 track['bbox'] = None
             track.clear()
-        
+
         self.track_history.clear()
         self.next_track_id = 1
-        
+
         # 强制垃圾回收
         import gc
         gc.collect()
-        
+
         logger.info("Tracking reset completed with memory cleanup")
 
     def set_tracking_enabled(self, enabled: bool = True):
@@ -205,23 +205,9 @@ class MultiPersonONNXPoseEstimator:
             return img, [], []
 
         # 2. 批量姿态估计
-        current_detections = []
+        current_detections = self._batch_pose_estimation(img, bboxes)
 
-        for bbox in bboxes:
-            # 裁剪人体区域
-            person_img = self._crop_person(img, bbox)
 
-            # 姿态估计
-            _, keypoints, scores = self.pose_estimator.inference(person_img)
-
-            # 将关键点坐标转换回原图坐标系
-            keypoints = self._transform_keypoints_to_original(keypoints, bbox)
-
-            current_detections.append({
-                'bbox': bbox[:4],  # [x1, y1, x2, y2]
-                'keypoints': keypoints,
-                'scores': scores
-            })
 
         # 3. Tracking
         tracked_objects = self._track_persons(current_detections)
@@ -234,6 +220,57 @@ class MultiPersonONNXPoseEstimator:
         scores_list = [obj['scores'] for obj in tracked_objects]
 
         return vis_img, keypoints_list, scores_list
+    
+    def _batch_pose_estimation(self, img: np.ndarray, bboxes: List[np.ndarray]) -> List[Dict]:
+        """批量姿态估计"""
+
+        if len(bboxes) == 0:
+            return []
+        
+        # 1. 批量裁剪和预处理
+        batch_person_imgs = []
+        batch_centers = []
+        batch_scales = []
+        for bbox in bboxes:
+            person_img = self._crop_person(img, bbox)
+            # 预处理单个图像
+            resized_img, center, scale = self.pose_estimator.preprocess(person_img)
+            resized_img=resized_img.astype(np.float32)
+            batch_person_imgs.append(resized_img)
+            batch_centers.append(center)
+            batch_scales.append(scale)
+
+         # 2. 构建batch输入
+        batch_input = np.stack(batch_person_imgs, axis=0)  # Shape: [N, H, W, C]
+        
+        # 3. 批量ONNX推理
+        batch_outputs = self.pose_estimator.run_inference_batch(batch_input)
+        
+        # 4. 批量后处理
+        current_detections = []
+        for i, bbox in enumerate(bboxes):
+            # 从batch输出中提取单个结果
+            single_outputs = [output[i:i+1] for output in batch_outputs]  # 保持batch维度
+            
+            # 后处理单个结果
+            keypoints, scores = self.pose_estimator.postprocess(
+                single_outputs, 
+                self.pose_estimator.model_input_size,
+                batch_centers[i], 
+                batch_scales[i]
+            )
+            
+            # 转换坐标系
+            keypoints = self._transform_keypoints_to_original(keypoints, bbox)
+            
+            current_detections.append({
+                'bbox': bbox[:4],
+                'keypoints': keypoints,
+                'scores': scores
+            })
+        
+        return current_detections
+        
 
     def _detect_humans(self, img: np.ndarray) -> List[np.ndarray]:
         """检测图像中的人体
