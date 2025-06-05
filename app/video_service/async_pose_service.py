@@ -95,26 +95,26 @@ class AsyncPoseService:
         try:
             import gc
             import torch
-            
+
             # 强制垃圾回收
             gc.collect()
-            
+
             # 清理CUDA缓存
             if torch.cuda.is_available():
                 current_device = torch.cuda.current_device()
-                memory_before = torch.cuda.memory_allocated(current_device) / 1024**2  # MB
-                
+                memory_before = torch.cuda.memory_allocated(current_device) / 1024 ** 2  # MB
+
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-                
-                memory_after = torch.cuda.memory_allocated(current_device) / 1024**2  # MB
+
+                memory_after = torch.cuda.memory_allocated(current_device) / 1024 ** 2  # MB
                 freed_memory = memory_before - memory_after
-                
-                logger.info(f"GPU memory cleanup - Before: {memory_before:.1f}MB, After: {memory_after:.1f}MB, Freed: {freed_memory:.1f}MB")
-            
+
+                logger.info(
+                    f"GPU memory cleanup - Before: {memory_before:.1f}MB, After: {memory_after:.1f}MB, Freed: {freed_memory:.1f}MB")
+
         except Exception as e:
             logger.warning(f"GPU memory cleanup failed: {e}")
-
 
     async def _performance_monitor(self):
         """改进的性能监控，支持优雅关闭"""
@@ -184,7 +184,7 @@ class AsyncPoseService:
             try:
                 # Get batch from queue
                 batch = await self.frame_buffer.batch_queue.get()
-
+                print(f'Processing batch len: {len(batch)}')
                 # Process batch
                 start_time = time.time()
                 results = await self.processor.process_batch(batch)
@@ -219,6 +219,29 @@ class AsyncPoseService:
         except asyncio.TimeoutError:
             logger.warning("Frame processing timeout")
             return frame, None  # Return original frame
+
+    async def process_frames_concurrent(self, frames):
+        """Process multiple frames concurrently - allows batch formation"""
+        if not self.running:
+            await self.start_pipeline()
+
+        # Submit all frames concurrently
+        futures = []
+        for frame in frames:
+            result_future = await self.frame_buffer.add_frame(frame)
+            futures.append(result_future)
+
+        # Wait for all results
+        results = []
+        for future in futures:
+            try:
+                result = await asyncio.wait_for(future, timeout=1)
+                results.append(result)
+            except asyncio.TimeoutError:
+                logger.warning("Frame processing timeout")
+                results.append((frames[len(results)], None))
+        
+        return results
 
 
 async_pose_service = AsyncPoseService()

@@ -10,17 +10,16 @@ logger = logging.getLogger(__name__)
 
 
 class FrameBuffer:
-    """Thread-safe frame buffer with batch formation"""
+    """Simple frame buffer that aggressively batches frames"""
 
     def __init__(self, config=batch_settings):
         self.config = config
         self.input_queue = asyncio.Queue(maxsize=config.max_queue_size)
         self.batch_queue = asyncio.Queue(maxsize=config.max_queue_size)
         self.result_queue = asyncio.Queue(maxsize=config.max_queue_size)
-
-        # Batch formation
-        self.current_batch = []
-        self.batch_timer = None
+        
+        logger.info(f"FrameBuffer initialized with batch_size: {config.batch_size}, "
+                   f"batch_timeout_ms: {config.batch_timeout_ms}")
 
     async def add_frame(self, frame_data):
         """Add frame with metadata (timestamp, frame_id)"""
@@ -28,119 +27,82 @@ class FrameBuffer:
             'frame': frame_data,
             'timestamp': time.time(),
             'frame_id': uuid.uuid4(),
-            'future': asyncio.Future()  # For result tracking
+            'future': asyncio.Future()
         }
         await self.input_queue.put(frame_item)
+        logger.debug(f"Frame added to input_queue, current queue size: {self.input_queue.qsize()}")
         return frame_item['future']
 
     async def collect_batches(self):
-        """Continuously form batches from input queue"""
+        """Aggressive batch collection - grabs as many frames as possible quickly"""
+        logger.info(f"Starting aggressive batch collection with batch_size: {self.config.batch_size}")
+        
         while True:
-            # Try to form batch with timeout
-            try:
-                frame_item = await asyncio.wait_for(
-                    self.input_queue.get(),
-                    timeout=self.config.batch_timeout_ms / 1000
-                )
-                self.current_batch.append(frame_item)
-
-                if len(self.current_batch) >= self.config.batch_size:
-                    await self._submit_batch()
-
-            except asyncio.TimeoutError:
-                if self.current_batch:  # Submit partial batch
-                    await self._submit_batch()
-            except asyncio.CancelledError:
-                # 处理取消信号，清理当前批次
-                await self._cleanup_current_batch()
-                raise
-
-    async def _submit_batch(self):
-        """Submit collected batch for processing"""
-        batch = self.current_batch.copy()
-        self.current_batch = []
-        await self.batch_queue.put(batch)
-
-    async def _cleanup_current_batch(self):
-        """清理当前批次中的未处理frames"""
-        if self.current_batch:
-            logger.info(f"Cleaning up current batch with {len(self.current_batch)} frames")
-            for frame_item in self.current_batch:
-                if not frame_item['future'].done():
-                    frame_item['future'].cancel()
-                # 清理frame数据
-                frame_item['frame'] = None
-            self.current_batch.clear()
+            current_batch = []
+            
+            # Get the first frame (blocking)
+            first_frame = await self.input_queue.get()
+            current_batch.append(first_frame)
+            start_time = time.time()
+            
+            # Quickly grab more frames without waiting
+            while len(current_batch) < self.config.batch_size:
+                try:
+                    # Very short timeout to grab frames quickly
+                    frame_item = await asyncio.wait_for(self.input_queue.get(), timeout=0.001)
+                    current_batch.append(frame_item)
+                except asyncio.TimeoutError:
+                    # No more frames available immediately
+                    break
+            
+            # Check timeout condition
+            elapsed = time.time() - start_time
+            timeout_reached = elapsed >= (self.config.batch_timeout_ms / 1000)
+            
+            # Submit batch if we have frames
+            if current_batch:
+                batch_size = len(current_batch)
+                await self.batch_queue.put(current_batch)
+                
+                if batch_size >= self.config.batch_size:
+                    logger.info(f"🎯 FULL BATCH: {batch_size} frames")
+                else:
+                    logger.info(f"⚡ QUICK BATCH: {batch_size} frames (grabbed in {elapsed*1000:.1f}ms)")
 
     async def cleanup_all_queues(self):
-        """清理所有队列中的未处理frames"""
-        logger.info("Starting comprehensive queue cleanup...")
-
-        # 记录清理前的统计
-        input_count = self.input_queue.qsize()
-        batch_count = self.batch_queue.qsize()
-        result_count = self.result_queue.qsize()
-
-        logger.info(f"Queue sizes before cleanup - Input: {input_count}, Batch: {batch_count}, Result: {result_count}")
-
-        # 1. 清理input_queue
+        """Clean up all queues and resources"""
+        logger.info("Starting queue cleanup...")
+        
+        # Clean queues
         cleaned_input = 0
         while not self.input_queue.empty():
-            try:
-                frame_item = self.input_queue.get_nowait()
-                if not frame_item['future'].done():
-                    frame_item['future'].cancel()
-                # 清理frame数据
-                frame_item['frame'] = None
-                frame_item.clear()
-                cleaned_input += 1
-            except asyncio.QueueEmpty:
-                break
-
-        # 2. 清理batch_queue
+            frame_item = self.input_queue.get_nowait()
+            if not frame_item['future'].done():
+                frame_item['future'].cancel()
+            frame_item['frame'] = None
+            cleaned_input += 1
+        
         cleaned_batch = 0
         while not self.batch_queue.empty():
-            try:
-                batch = self.batch_queue.get_nowait()
-                for frame_item in batch:
-                    if not frame_item['future'].done():
-                        frame_item['future'].cancel()
-                    # 清理frame数据
-                    frame_item['frame'] = None
-                    frame_item.clear()
-                    cleaned_batch += 1
-                batch.clear()
-            except asyncio.QueueEmpty:
-                break
-
-        # 3. 清理result_queue
+            batch = self.batch_queue.get_nowait()
+            for frame_item in batch:
+                if not frame_item['future'].done():
+                    frame_item['future'].cancel()
+                frame_item['frame'] = None
+                cleaned_batch += 1
+        
         cleaned_result = 0
         while not self.result_queue.empty():
-            try:
-                result_item = self.result_queue.get_nowait()
-                # 清理结果数据
-                if 'result' in result_item:
-                    result_item['result'] = None
-                result_item.clear()
-                cleaned_result += 1
-            except asyncio.QueueEmpty:
-                break
-
-        # 4. 清理当前批次
-        await self._cleanup_current_batch()
-
-        logger.info(
-            f"Queue cleanup completed - Cleaned {cleaned_input} input frames, {cleaned_batch} batch frames, {cleaned_result} result items")
-
-        # 5. 强制垃圾回收
+            result_item = self.result_queue.get_nowait()
+            cleaned_result += 1
+        
+        logger.info(f"Cleanup completed - {cleaned_input} input, {cleaned_batch} batch, {cleaned_result} result items")
         gc.collect()
-        logger.info("Forced garbage collection completed")
 
     def get_queue_stats(self):
-        """获取队列统计信息"""
+        """Get queue statistics"""
         return {
             'input_queue_size': self.input_queue.qsize(),
             'batch_queue_size': self.batch_queue.qsize(),
-            'result_queue_size': self.result_queue.qsize(),
-            'current_batch_size': len(self.current_batch)
+            'result_queue_size': self.result_queue.qsize()
         }

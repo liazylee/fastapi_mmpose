@@ -202,7 +202,7 @@ async function startConnection() {
             payload.type = pc.localDescription.type;
         }
         updateStatus('Sending connection request to server...');
-        const response = await fetch('/offer', {
+        const response = await fetch('/webrtc/offer', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)

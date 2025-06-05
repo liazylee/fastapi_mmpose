@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 import torch
@@ -42,40 +42,44 @@ class BatchProcessingConfig:
     device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     PROJECT_ROOT: ClassVar[str] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # Batch settings
-    batch_size: int = 16
+    # Batch settings - optimized for real-time video streaming
+    batch_size: int = 16  # Reduced from 32 to 8 for faster batch formation in real-time streams
     max_queue_size: int = 50
-    batch_timeout_ms: int = 2  # Max wait time to form batch
+    batch_timeout_ms: int = 500  # Reduced from 100ms to 50ms for lower latency
 
     # Threading settings
-    num_workers: int = os.cpu_count() or 4  # Separate threads for different stages
-    gpu_streams: int = 40  # CUDA streams for parallel processing
-
-    # # Performance settings
-    # prefetch_factor: int = 20
-    # pin_memory: bool = True
-    # non_blocking: bool = True
+    num_workers: int = os.cpu_count() or 4
+    gpu_streams: int = 40
 
     # Model settings
-    enable_tensorrt: bool = False  # Toggle for future TensorRT
-    input_resolution: tuple = (1920, 1080)  # Input resolution for video processing
-    detection_batch_size: int = 16  # Can differ from pose batch size
+    enable_tensorrt: bool = False
+    input_resolution: tuple = (1920, 1080)
+    detection_batch_size: int = 4
     pose_batch_size: int = 10
     det_score_thr: float = 0.4
     pose_score_thr: float = 0.5
     max_track_age: int = 60
     iou_threshold: float = 0.5
-    onnx_path = os.path.join(PROJECT_ROOT,
-                             "pose_service/configs/rtmpose_onnx/end2end.onnx")
+    onnx_path = os.path.join(PROJECT_ROOT, "pose_service/configs/rtmpose_onnx/end2end.onnx")
 
-    # YOLO Detection settings
-    use_yolo_detector: bool = False  # 是否使用YOLO检测器
-    yolo_model_path: str = os.path.join(PROJECT_ROOT,
-                                        "pose_service/configs/best.onnx")  # YOLO模型文件路径(.pt or onnx文件)
-    use_yolo_tracking: bool = True  # 是否使用YOLO内置tracking功能
-    yolo_conf_threshold: float = 0.5  # YOLO置信度阈值
+    # YOLO Detection and Tracking settings
+    detector_type: str = 'yolo'
+    yolo_model_path: str = os.path.join(PROJECT_ROOT, "app/pose_service/configs/yolo11n.pt")
+    yolo_conf_threshold: float = 0.5
+    yolo_device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    yolo_iou_threshold: float = 0.7
+    yolo_max_det: int = 300
+    yolo_classes: list = field(default_factory=lambda: [0])  # Only detect persons
+
+    # YOLO Tracking settings
+    use_yolo_detector: bool = True
+    enable_tracking: bool = True
+    use_yolo_tracking: bool = False  # 是否使用YOLO内置tracking，现在设为False使用我们的简化实现
+    use_bytetrack: bool = True  # 是否使用ByteTrack（通过YOLO）
+    tracker_type: str = 'bytetrack'  # YOLO支持的tracker类型: bytetrack, botsort
+    track_persist: bool = True  # 持续跟踪
+    track_verbose: bool = False  # 跟踪输出详细信息
 
 
 batch_settings: BatchProcessingConfig = BatchProcessingConfig()
-
 settings: Settings = Settings()

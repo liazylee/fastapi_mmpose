@@ -1,127 +1,210 @@
+import asyncio
 import logging
+from typing import Optional
 
 from aiortc import VideoStreamTrack
 from av import VideoFrame
 
 from app.config import batch_settings
-from app.video_service.async_pose_service import async_pose_service
-from app.video_service.permance_monitor import monitor
+from app.video_service.streaming_processor import StreamingPoseProcessor
 
 logger = logging.getLogger(__name__)
 
 
-class VideoTransformTrack(VideoStreamTrack):
-    def __init__(self, track, config=None):
+class AsyncVideoTransformTrack(VideoStreamTrack):
+    """
+    Asynchronous video transform track with non-blocking processing
+    Implements the new streaming architecture:
+    - recv() only collects frames + returns latest processed frame
+    - Background batch processing runs independently
+    - Controlled output timing for stable FPS
+    """
+
+    def __init__(self, track, config=None, target_fps: int = 30):
         super().__init__()
         self.track = track
         self.config = config or batch_settings
+        self.target_fps = target_fps
 
-        # Use async pose service
-        self.pose_service = async_pose_service
+        # Initialize the streaming processor
+        self.processor = StreamingPoseProcessor(self.config, target_fps)
         
-        # Tracking enabled by default
-        self._tracking_enabled = True
+        # Frame management
+        self.last_output_frame: Optional[VideoFrame] = None
+        self.frame_count = 0
+        
+        # Performance tracking
+        self.processing_enabled = True
+        self._is_started = False
+        
+        # Simple track state
+        self._track_ended = False
+        
+        logger.info(f"AsyncVideoTransformTrack initialized - target FPS: {target_fps}")
+
+    async def _ensure_processor_started(self):
+        """Ensure the processor is started"""
+        if not self._is_started:
+            await self.processor.start()
+            self._is_started = True
 
     async def recv(self):
-        monitor.start_frame()
-        frame = await self.track.recv()
-        img = frame.to_ndarray(format="bgr24")
-        monitor.frame_received()
-        # Process through async pipeline
-        vis_img, pose_results = await self.pose_service.process_frame_async(img)
+        """Non-blocking recv() - ends when track ends"""
+        # If track ended, stop the stream
+        if self._track_ended:
+            raise Exception("Video track has ended")
+        
+        await self._ensure_processor_started()
+        
+        # Get source frame - let exceptions propagate to end the stream
+        source_frame = await self.track.recv()
+        input_image = source_frame.to_ndarray(format="bgr24")
+        
+        # Add to processing pipeline
+        if self.processing_enabled:
+            self.processor.add_frame(input_image)
+        
+        # Get output frame
+        output_frame, should_output = self.processor.get_output_frame()
+        
+        if should_output and output_frame is not None:
+            # New processed frame
+            self.last_output_frame = VideoFrame.from_ndarray(output_frame, format="bgr24")
+            self.last_output_frame.pts = source_frame.pts
+            self.last_output_frame.time_base = source_frame.time_base
+            self._save_timing_info(source_frame)
+            self.frame_count += 1
+            return self.last_output_frame
+            
+        elif self.last_output_frame is not None:
+            # Repeat last frame with new timing
+            repeated_frame = VideoFrame.from_ndarray(
+                self.last_output_frame.to_ndarray(format="bgr24"), format="bgr24"
+            )
+            repeated_frame.pts = source_frame.pts
+            repeated_frame.time_base = source_frame.time_base
+            self._save_timing_info(source_frame)
+            return repeated_frame
+            
+        else:
+            # Return original frame
+            self.last_output_frame = source_frame
+            self._save_timing_info(source_frame)
+            return self.last_output_frame
+    
+    def _save_timing_info(self, frame):
+        """Save timing information"""
+        self._last_pts = frame.pts
+        self._last_time_base = frame.time_base
 
-        if vis_img is not None:
-            img = vis_img
+    def enable_processing(self):
+        """Enable pose processing"""
+        self.processing_enabled = True
+        logger.info("Pose processing enabled")
 
-        new_frame = VideoFrame.from_ndarray(img, format="bgr24")
-        new_frame.pts = frame.pts
-        new_frame.time_base = frame.time_base
-        monitor.frame_processed()
-        return new_frame
+    def disable_processing(self):
+        """Disable pose processing - will output original frames"""
+        self.processing_enabled = False
+        logger.info("Pose processing disabled")
 
     def reset_tracking(self):
-        """重置tracking功能"""
-        try:
-            # 重置async pose service中的tracking
-            if hasattr(self.pose_service, 'processor') and hasattr(self.pose_service.processor, 'reset_tracking'):
-                self.pose_service.processor.reset_tracking()
-            # 重置batch processor中的tracking  
-            if hasattr(self.pose_service, 'processor') and hasattr(self.pose_service.processor, 'pose_estimator'):
-                if hasattr(self.pose_service.processor.pose_estimator, 'reset_tracking'):
-                    self.pose_service.processor.pose_estimator.reset_tracking()
-            logger.info("Tracking reset in video transform track")
-        except Exception as e:
-            logger.warning(f"Failed to reset tracking: {e}")
+        """Reset tracking functionality"""
+        if hasattr(self.processor, 'batch_processor') and \
+                hasattr(self.processor.batch_processor, 'processor'):
+            processor = self.processor.batch_processor.processor
+            if hasattr(processor, 'reset_tracking'):
+                processor.reset_tracking()
+            if hasattr(processor, 'pose_estimator') and \
+                    hasattr(processor.pose_estimator, 'reset_tracking'):
+                processor.pose_estimator.reset_tracking()
+        logger.info("Tracking reset in async video track")
 
     def set_tracking_enabled(self, enabled: bool):
-        """启用/禁用tracking功能"""
-        try:
-            self._tracking_enabled = enabled
-            # 设置async pose service中的tracking
-            if hasattr(self.pose_service, 'processor') and hasattr(self.pose_service.processor, 'set_tracking_enabled'):
-                self.pose_service.processor.set_tracking_enabled(enabled)
-            # 设置batch processor中的tracking
-            if hasattr(self.pose_service, 'processor') and hasattr(self.pose_service.processor, 'pose_estimator'):
-                if hasattr(self.pose_service.processor.pose_estimator, 'set_tracking_enabled'):
-                    self.pose_service.processor.pose_estimator.set_tracking_enabled(enabled)
-            logger.info(f"Tracking {'enabled' if enabled else 'disabled'} in video transform track")
-        except Exception as e:
-            logger.warning(f"Failed to set tracking enabled: {e}")
+        """Enable/disable tracking functionality"""
+        if hasattr(self.processor, 'batch_processor') and \
+                hasattr(self.processor.batch_processor, 'processor'):
+            processor = self.processor.batch_processor.processor
+            if hasattr(processor, 'set_tracking_enabled'):
+                processor.set_tracking_enabled(enabled)
+            if hasattr(processor, 'pose_estimator') and \
+                    hasattr(processor.pose_estimator, 'set_tracking_enabled'):
+                processor.pose_estimator.set_tracking_enabled(enabled)
+        logger.info(f"Tracking {'enabled' if enabled else 'disabled'} in async video track")
 
     def is_tracking_enabled(self) -> bool:
-        """检查tracking是否启用"""
-        return self._tracking_enabled
+        """Check if tracking is enabled"""
+        return self.processing_enabled
 
-    def stop(self):
-        """停止处理服务并清理所有资源"""
-        logger.info("Stopping video transform track...")
-        
-        if hasattr(self.pose_service, 'stop_pipeline'):
-            # AsyncPoseService - 异步停止
-            import asyncio
+    async def stop(self):
+        """Stop the video track and clean up resources"""
+        logger.info("Stopping async video transform track...")
+
+        # Stop the streaming processor
+        if self._is_started:
+            await self.processor.stop()
+            self._is_started = False
+
+        # Clear references
+        self.processor = None
+        self.track = None
+        self.last_output_frame = None
+
+        logger.info("Async video transform track stopped")
+
+    def get_performance_stats(self) -> dict:
+        """Get comprehensive performance statistics"""
+        if hasattr(self.processor, 'get_comprehensive_stats'):
+            return self.processor.get_comprehensive_stats()
+        return {}
+
+    def __del__(self):
+        """Cleanup on destruction"""
+        if self._is_started and self.processor is not None:
+            # Schedule cleanup task if event loop is available
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # 如果事件循环正在运行，创建任务
-                    task = loop.create_task(self.pose_service.stop_pipeline())
-                    logger.info("Created stop pipeline task")
+                    # Create task to stop processor
+                    asyncio.create_task(self._cleanup_async())
                 else:
-                    # 如果事件循环未运行，直接运行
-                    loop.run_until_complete(self.pose_service.stop_pipeline())
-            except Exception as e:
-                logger.error(f"Error stopping AsyncPoseService: {e}")
-        elif hasattr(self.pose_service, 'stop'):
-            # ThreadedPoseService
-            self.pose_service.stop()
+                    # If no running loop, run cleanup synchronously
+                    asyncio.run(self._cleanup_async())
+            except RuntimeError:
+                # No event loop available, do synchronous cleanup
+                self._cleanup_sync()
 
-        # 清理本地引用
-        self.pose_service = None
-        self.track = None
-        
-        # 强制垃圾回收
-        import gc
-        gc.collect()
+    async def _cleanup_async(self):
+        """Async cleanup helper"""
+        if self._is_started and self.processor is not None:
+            await self.processor.stop()
+            self._is_started = False
+            self.processor = None
 
-        logger.info("Video transform track stopped and resources cleaned")
-
-    def __del__(self):
-        """析构时清理资源"""
-        try:
-            self.stop()
-        except:
-            pass
+    def _cleanup_sync(self):
+        """Synchronous cleanup helper for when no event loop is available"""
+        if self.processor is not None:
+            # Mark as stopped
+            self._is_started = False
+            # Clear references without async cleanup
+            self.processor = None
+            self.track = None
+            self.last_output_frame = None
 
 
-# Connection management
+# For backward compatibility, provide the original class name
+class VideoTransformTrack(AsyncVideoTransformTrack):
+    """Backward compatibility alias"""
+    pass
+
+
+# Global management functions remain the same
 pcs = set()
-
-# 全局tracking状态管理
 _global_tracking_enabled = True
 _active_video_tracks = []
 
 
 def get_global_tracking_status():
-    """获取全局tracking状态"""
+    """Get global tracking status"""
     return {
         "enabled": _global_tracking_enabled,
         "active_tracks": len(_active_video_tracks)
@@ -129,38 +212,38 @@ def get_global_tracking_status():
 
 
 def set_global_tracking_enabled(enabled: bool):
-    """设置全局tracking状态"""
+    """Set global tracking status"""
     global _global_tracking_enabled
     _global_tracking_enabled = enabled
-    
-    # 更新所有活跃的video tracks
+
+    # Update all active video tracks
     for video_track in _active_video_tracks:
         if hasattr(video_track, 'set_tracking_enabled'):
             video_track.set_tracking_enabled(enabled)
-    
+
     logger.info(f"Global tracking {'enabled' if enabled else 'disabled'} for {len(_active_video_tracks)} tracks")
 
 
 def reset_global_tracking():
-    """重置所有活跃video tracks的tracking"""
+    """Reset all active video tracks' tracking"""
     for video_track in _active_video_tracks:
         if hasattr(video_track, 'reset_tracking'):
             video_track.reset_tracking()
-    
+
     logger.info(f"Global tracking reset for {len(_active_video_tracks)} tracks")
 
 
 def register_video_track(video_track):
-    """注册新的video track"""
+    """Register new video track"""
     if video_track not in _active_video_tracks:
         _active_video_tracks.append(video_track)
-        # 应用全局tracking设置
+        # Apply global tracking settings
         if hasattr(video_track, 'set_tracking_enabled'):
             video_track.set_tracking_enabled(_global_tracking_enabled)
 
 
 def unregister_video_track(video_track):
-    """注销video track"""
+    """Unregister video track"""
     if video_track in _active_video_tracks:
         _active_video_tracks.remove(video_track)
 

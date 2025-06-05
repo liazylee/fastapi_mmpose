@@ -9,6 +9,7 @@ import onnxruntime as ort
 
 from app.pose_service.draw_pose_numba import _draw_circle_numba, _draw_line_numba, point_color, palette, skeleton, \
     link_color, default_skeleton, keypoint_colors
+from app.video_service.permance_monitor import time_block
 
 logger = logging.getLogger(__name__)
 
@@ -104,19 +105,20 @@ class ONNXPoseEstimator:
         """
         # 确保输入数据类型为float32
         batch_imgs = batch_imgs.astype(np.float32)
-        
+
         # 转换为 [N, C, H, W] 格式
         input_tensor = batch_imgs.transpose(0, 3, 1, 2)
-        
+
         # 构建输入
         sess_input = {self.sess.get_inputs()[0].name: input_tensor}
         sess_output = []
         for out in self.sess.get_outputs():
             sess_output.append(out.name)
-        
+
         # 运行模型
-        outputs = self.sess.run(sess_output, sess_input)
-        
+        with time_block(name=f'onnx run batch', log_result=True):  # 10083
+            outputs = self.sess.run(sess_output, sess_input)
+
         return outputs
 
     def postprocess(self, outputs: List[np.ndarray], model_input_size: Tuple[int, int],
