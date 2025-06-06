@@ -1,6 +1,5 @@
 # app/video_service/batch_GPU_process_onnx.py
 
-import asyncio
 import os
 from logging import getLogger
 from typing import List, Tuple
@@ -12,7 +11,7 @@ from mmpose.utils import adapt_mmdet_pipeline
 
 from app.config import batch_settings, settings
 from app.pose_service.multi_person_onnx import MultiPersonONNXPoseEstimator
-from app.pose_service.yolo_detector import YOLODetector, YOLODetectorAdapter
+from app.pose_service.yolo_detector import YOLODetectorAdapter
 
 logger = getLogger(__name__)
 
@@ -88,56 +87,6 @@ class BatchPoseProcessorONNX:
             self.pose_estimator.set_tracking_enabled(enabled)
             logger.info(f"Tracking {'enabled' if enabled else 'disabled'} in batch processor")
 
-    async def process_batch(self, batch_items: List[dict]) -> List[Tuple]:
-        """Process batch of frames efficiently with ONNX pose estimator and tracking
-
-        Args:
-            batch_items: List of batch items with 'frame' key
-
-        Returns:
-            List of (batch_item, vis_img, pose_results) tuples
-        """
-        if not batch_items:
-            return []
-        loop = asyncio.get_event_loop()
-
-        def _process_frames():
-            results = []
-
-            for item in batch_items:
-                frame = item['frame']
-
-                # Ensure frame is in correct format
-                # processed_frame = self._ensure_frame_format(frame)
-
-                # Process with multi-person ONNX estimator (now with tracking)
-                vis_img, keypoints_list, scores_list = self.pose_estimator.inference(frame)
-
-                # Format results to match expected interface
-                pose_results = self._format_pose_results(keypoints_list, scores_list)
-
-                results.append((item, vis_img, pose_results))
-
-            return results
-
-        def _process_frames_batch():
-            # 提取所有帧
-            frames = [self._ensure_frame_format(item['frame']) for item in batch_items]
-
-            # 真正的batch处理 - 一次性处理所有图像
-            batch_results = self.pose_estimator.inference_batch_images(frames)
-
-            # 格式化结果
-            results = []
-            for (item, (vis_img, keypoints_list, scores_list)) in zip(batch_items, batch_results):
-                pose_results = self._format_pose_results(keypoints_list, scores_list)
-                results.append((item, vis_img, pose_results))
-
-            return results
-
-        # Run processing in thread pool to avoid blocking
-        return await loop.run_in_executor(None, _process_frames_batch)
-
     def _ensure_frame_format(self, frame) -> np.ndarray:
         """Ensure frame is in correct format (BGR uint8)"""
         # Convert tensor to numpy if needed
@@ -164,8 +113,8 @@ class BatchPoseProcessorONNX:
             logger.warning(f"Unexpected frame shape: {frame.shape}")
             return frame
 
-    def process_batch_sync(self, batch_items: List[dict]) -> List[Tuple]:
-        """同步版本的batch处理，用于非async环境"""
+    async def process_batch_sync(self, batch_items: List[dict]) -> List[Tuple]:
+        """版本的batch处理，用于非async环境"""
         if not batch_items:
             return []
 
@@ -173,7 +122,7 @@ class BatchPoseProcessorONNX:
         frames = [self._ensure_frame_format(item['frame']) for item in batch_items]
 
         # 真正的batch处理
-        batch_results = self.pose_estimator.inference_batch_images(frames)
+        batch_results = await self.pose_estimator.inference_batch_images(frames)
 
         # 格式化结果
         results = []

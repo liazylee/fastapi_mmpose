@@ -1,6 +1,7 @@
 # app/pose_service/onnx_inference.py
 
 import logging
+import os
 from typing import List, Tuple
 
 import cv2
@@ -31,8 +32,17 @@ class ONNXPoseEstimator:
 
     def _build_session(self) -> ort.InferenceSession:
         """构建ONNX运行时会话"""
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        sess_options.intra_op_num_threads = os.cpu_count()  # 可以根据CPU核心数调整
+
         providers = ['CPUExecutionProvider'] if self.device == 'cpu' else ['CUDAExecutionProvider']
-        sess = ort.InferenceSession(path_or_bytes=self.onnx_file, providers=providers)
+        sess = ort.InferenceSession(
+            path_or_bytes=self.onnx_file,
+            providers=providers,
+            sess_options=sess_options  # 添加这个参数
+        )
         return sess
 
     def inference(self, img: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -58,7 +68,7 @@ class ONNXPoseEstimator:
 
         return vis_img, keypoints, scores
 
-    def preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    async def preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """预处理图像"""
         # 获取图像形状
         img_shape = img.shape[:2]
@@ -94,7 +104,7 @@ class ONNXPoseEstimator:
 
         return outputs
 
-    def run_inference_batch(self, batch_imgs: np.ndarray) -> List[np.ndarray]:
+    async def run_inference_batch(self, batch_imgs: np.ndarray) -> List[np.ndarray]:
         """批量运行ONNX推理
 
         Args:
@@ -121,9 +131,9 @@ class ONNXPoseEstimator:
 
         return outputs
 
-    def postprocess(self, outputs: List[np.ndarray], model_input_size: Tuple[int, int],
-                    center: np.ndarray, scale: np.ndarray, simcc_split_ratio: float = 2.0
-                    ) -> Tuple[np.ndarray, np.ndarray]:
+    async def postprocess(self, outputs: List[np.ndarray], model_input_size: Tuple[int, int],
+                          center: np.ndarray, scale: np.ndarray, simcc_split_ratio: float = 2.0
+                          ) -> Tuple[np.ndarray, np.ndarray]:
         """后处理ONNX模型输出"""
         # 使用simcc解码
         simcc_x, simcc_y = outputs
@@ -317,27 +327,159 @@ class ONNXPoseEstimator:
 
         return keypoints, scores
 
-# onnx_file = "/home/stanley/jobs/python/AI/fastapi_mmpose/app/pose_service/configs/rtmpose_onnx/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504/end2end.onnx"
-# pose_estimator = ONNXPoseEstimator(onnx_file, device='cuda')
+    # 添加到 onnx_inference.py 中，用于性能分析
 
-# 示例使用方法
-# def main():
-#     # 初始化ONNX推理器
-#
-#     # 读取图像
-#     image_path = "/home/stanley/jobs/python/AI/mmpose/projects/rtmpose/examples/onnxruntime/human-pose.jpeg"
-#     img = cv2.imread(image_path)
-#
-#     # 执行推理
-#     vis_img, keypoints, scores = pose_estimator.inference(img)
-#
-#     # 保存结果
-#     cv2.imwrite("output.jpg", vis_img)
-#
-#     print(f"关键点形状: {keypoints.shape}")
-#     print(f"分数形状: {scores.shape}")
-#
-#
-# if __name__ == "__main__":
-#     # main()
-#     pass
+    def benchmark_detailed_performance(self):
+        """详细的性能基准测试"""
+        import torch
+        import time
+        import GPUtil
+
+        print("🔍 RTMPose ONNX 性能深度分析")
+        print("=" * 60)
+
+        # 1. 环境信息
+        print(f"ONNX Runtime版本: {ort.__version__}")
+        print(f"设备: {self.device}")
+        print(f"模型输入尺寸: {self.model_input_size}")
+
+        # GPU信息
+        if torch.cuda.is_available():
+            gpu = GPUtil.getGPUs()[0]
+            print(f"GPU: {gpu.name}")
+            print(f"GPU内存: {gpu.memoryTotal}MB")
+            print(f"GPU驱动: {torch.version.cuda}")
+
+        # 2. 创建测试数据
+        dummy_img = np.random.randint(0, 255, (256, 192, 3), dtype=np.uint8).astype(np.float32)
+
+        # 归一化
+        mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+        std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+        dummy_img = (dummy_img - mean) / std
+
+        # 转换格式
+        single_input = dummy_img.transpose(2, 0, 1)[np.newaxis, ...]  # [1, C, H, W]
+
+        print(f"输入形状: {single_input.shape}")
+        print(f"输入数据类型: {single_input.dtype}")
+
+        # 3. 单帧性能测试
+        print("\n📊 单帧性能测试:")
+        warmup_runs = 10
+        test_runs = 50
+
+        # 预热
+        for _ in range(warmup_runs):
+            _ = self.sess.run([out.name for out in self.sess.get_outputs()],
+                              {self.sess.get_inputs()[0].name: single_input})
+
+        # 测试单帧
+        start_time = time.time()
+        for _ in range(test_runs):
+            _ = self.sess.run([out.name for out in self.sess.get_outputs()],
+                              {self.sess.get_inputs()[0].name: single_input})
+        single_frame_time = (time.time() - start_time) / test_runs
+
+        print(f"单帧平均时间: {single_frame_time * 1000:.2f}ms")
+        print(f"单帧FPS: {1 / single_frame_time:.1f}")
+
+        # 4. 不同batch size测试
+        print("\n📊 批处理性能测试:")
+        batch_sizes = [1, 2, 4, 8, 16, 32]
+
+        for batch_size in batch_sizes:
+            try:
+                # 创建batch输入
+                batch_input = np.repeat(single_input, batch_size, axis=0)
+
+                # 预热
+                for _ in range(5):
+                    _ = self.sess.run([out.name for out in self.sess.get_outputs()],
+                                      {self.sess.get_inputs()[0].name: batch_input})
+
+                # 测试
+                start_time = time.time()
+                test_runs_batch = max(1, 20 // batch_size)  # 适应不同batch size
+                for _ in range(test_runs_batch):
+                    _ = self.sess.run([out.name for out in self.sess.get_outputs()],
+                                      {self.sess.get_inputs()[0].name: batch_input})
+
+                batch_time = (time.time() - start_time) / test_runs_batch
+                per_frame_time = batch_time / batch_size
+                batch_fps = batch_size / batch_time
+
+                print(
+                    f"Batch {batch_size:2d}: {batch_time * 1000:6.1f}ms total, {per_frame_time * 1000:5.1f}ms/frame, {batch_fps:5.1f} FPS")
+
+            except Exception as e:
+                print(f"Batch {batch_size}: 内存不足 - {e}")
+                break
+
+        # 5. 内存使用分析
+        print("\n📊 内存使用分析:")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            memory_before = torch.cuda.memory_allocated() / 1024 ** 2
+
+            # 执行一次大batch推理
+            large_batch = np.repeat(single_input, 16, axis=0)
+            _ = self.sess.run([out.name for out in self.sess.get_outputs()],
+                              {self.sess.get_inputs()[0].name: large_batch})
+
+            memory_after = torch.cuda.memory_allocated() / 1024 ** 2
+            memory_peak = torch.cuda.max_memory_allocated() / 1024 ** 2
+
+            print(f"推理前GPU内存: {memory_before:.1f}MB")
+            print(f"推理后GPU内存: {memory_after:.1f}MB")
+            print(f"内存峰值: {memory_peak:.1f}MB")
+            print(f"内存增量: {memory_after - memory_before:.1f}MB")
+
+        # 6. 模型信息分析
+        print("\n📊 模型结构分析:")
+        print(f"输入节点数: {len(self.sess.get_inputs())}")
+        print(f"输出节点数: {len(self.sess.get_outputs())}")
+
+        for i, input_node in enumerate(self.sess.get_inputs()):
+            print(f"输入 {i}: {input_node.name}, 形状: {input_node.shape}, 类型: {input_node.type}")
+
+        for i, output_node in enumerate(self.sess.get_outputs()):
+            print(f"输出 {i}: {output_node.name}, 形状: {output_node.shape}, 类型: {output_node.type}")
+
+        # 7. 对比分析
+        print("\n📊 性能对比分析:")
+        expected_single_frame = 8  # RTMPose-M expected time (ms)
+        expected_batch_16 = 5  # Expected per-frame time in batch
+
+        single_frame_ms = single_frame_time * 1000
+        efficiency_single = expected_single_frame / single_frame_ms
+
+        print(
+            f"单帧性能效率: {efficiency_single:.2f}x (期望: {expected_single_frame}ms, 实际: {single_frame_ms:.1f}ms)")
+
+        if single_frame_ms > 20:
+            print("⚠️  单帧性能明显偏慢，可能问题:")
+            print("   - ONNX模型未充分优化")
+            print("   - ONNX Runtime配置问题")
+            print("   - 输入数据格式或精度问题")
+
+        print("\n" + "=" * 60)
+
+    # 在 ONNXPoseEstimator 类中添加测试方法
+    def run_performance_test(self):
+        """运行性能测试"""
+        self.benchmark_detailed_performance()
+
+    # 快速添加到现有代码中进行测试
+    def quick_performance_check(onnx_file_path, device='cuda'):
+        """快速性能检查函数"""
+        from app.pose_service.onnx_inference import ONNXPoseEstimator
+
+        pose_estimator = ONNXPoseEstimator(onnx_file_path, device)
+        pose_estimator.benchmark_detailed_performance()
+
+        return pose_estimator
+
+# pose_estimator = ONNXPoseEstimator(
+#     '/home/stanley/jobs/python/AI/fastapi_mmpose/app/pose_service/configs/rtmpose_onnx/end2end.onnx', 'cuda')
+# pose_estimator.benchmark_detailed_performance()

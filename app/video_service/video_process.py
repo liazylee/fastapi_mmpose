@@ -28,18 +28,18 @@ class AsyncVideoTransformTrack(VideoStreamTrack):
 
         # Initialize the streaming processor
         self.processor = StreamingPoseProcessor(self.config, target_fps)
-        
+
         # Frame management
         self.last_output_frame: Optional[VideoFrame] = None
         self.frame_count = 0
-        
+
         # Performance tracking
         self.processing_enabled = True
         self._is_started = False
-        
+
         # Simple track state
         self._track_ended = False
-        
+
         logger.info(f"AsyncVideoTransformTrack initialized - target FPS: {target_fps}")
 
     async def _ensure_processor_started(self):
@@ -50,23 +50,23 @@ class AsyncVideoTransformTrack(VideoStreamTrack):
 
     async def recv(self):
         """Non-blocking recv() - ends when track ends"""
-        # If track ended, stop the stream
+        """优化的 recv 方法 - 减少跳帧和卡顿"""
         if self._track_ended:
             raise Exception("Video track has ended")
-        
+
         await self._ensure_processor_started()
-        
-        # Get source frame - let exceptions propagate to end the stream
+
+        # Get source frame
         source_frame = await self.track.recv()
         input_image = source_frame.to_ndarray(format="bgr24")
-        
+
         # Add to processing pipeline
         if self.processing_enabled:
             self.processor.add_frame(input_image)
-        
-        # Get output frame
-        output_frame, should_output = self.processor.get_output_frame()
-        
+
+        # 异步获取输出帧，带等待
+        output_frame, should_output = await self.processor.get_output_frame_async(timeout_ms=50)
+
         if should_output and output_frame is not None:
             # New processed frame
             self.last_output_frame = VideoFrame.from_ndarray(output_frame, format="bgr24")
@@ -75,9 +75,10 @@ class AsyncVideoTransformTrack(VideoStreamTrack):
             self._save_timing_info(source_frame)
             self.frame_count += 1
             return self.last_output_frame
-            
+
         elif self.last_output_frame is not None:
-            # Repeat last frame with new timing
+            # Repeat last frame with new timing (减少重复帧的使用)
+            # 只有在等待超时时才使用重复帧
             repeated_frame = VideoFrame.from_ndarray(
                 self.last_output_frame.to_ndarray(format="bgr24"), format="bgr24"
             )
@@ -85,13 +86,13 @@ class AsyncVideoTransformTrack(VideoStreamTrack):
             repeated_frame.time_base = source_frame.time_base
             self._save_timing_info(source_frame)
             return repeated_frame
-            
+
         else:
             # Return original frame
             self.last_output_frame = source_frame
             self._save_timing_info(source_frame)
             return self.last_output_frame
-    
+
     def _save_timing_info(self, frame):
         """Save timing information"""
         self._last_pts = frame.pts

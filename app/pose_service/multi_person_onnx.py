@@ -196,7 +196,7 @@ class MultiPersonONNXPoseEstimator:
 
         return bboxes, track_ids
 
-    @timeit(name=f'{__name__}._detect_humans', log_threshold_ms=50)
+    @timeit(name=f'{__name__}._detect_humans', log_threshold_ms=20)
     def _detect_humans(self, img: np.ndarray) -> List[np.ndarray]:
         """检测图像中的人体（不包含tracking）
 
@@ -277,7 +277,7 @@ class MultiPersonONNXPoseEstimator:
 
         return img[new_y1:new_y2, new_x1:new_x2]
 
-    def _transform_keypoints_to_original(self, keypoints: np.ndarray, bbox: np.ndarray) -> np.ndarray:
+    async def _transform_keypoints_to_original(self, keypoints: np.ndarray, bbox: np.ndarray) -> np.ndarray:
         """将关键点坐标从裁剪图像坐标系转换回原图坐标系
 
         Args:
@@ -329,7 +329,7 @@ class MultiPersonONNXPoseEstimator:
 
     # real batch process
     @timeit(name=f'{__name__}.inference_batch_images ', log_threshold_ms=50)
-    def inference_batch_images(self, imgs: List[np.ndarray]) -> List[
+    async def inference_batch_images(self, imgs: List[np.ndarray]) -> List[
         Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]]:
         """
         pose estimator and tracking ID in  a  batch
@@ -339,7 +339,7 @@ class MultiPersonONNXPoseEstimator:
         if not imgs:
             return [], [], []
 
-        batch_detections = self._batch_detect_humans(imgs)  # 40 ms
+        batch_detections = await self._batch_detect_humans(imgs)  # 40 ms
         # 收集所有需要进行姿态估计的人体区域
         all_person_imgs = []
         all_centers = []
@@ -352,7 +352,7 @@ class MultiPersonONNXPoseEstimator:
 
                 for bbox_idx, bbox in enumerate(bboxes):
                     person_img = self._crop_person(img, bbox)
-                    resized_img, center, scale = self.pose_estimator.preprocess(person_img)
+                    resized_img, center, scale = await self.pose_estimator.preprocess(person_img)
                     resized_img = resized_img.astype(np.float32)
 
                     all_person_imgs.append(resized_img)
@@ -367,7 +367,7 @@ class MultiPersonONNXPoseEstimator:
                 mega_batch_input = np.stack(all_person_imgs, axis=0)
 
                 # 批量ONNX推理
-                mega_batch_outputs = self.pose_estimator.run_inference_batch(mega_batch_input)
+                mega_batch_outputs = await self.pose_estimator.run_inference_batch(mega_batch_input)
 
                 # 分解batch结果
                 all_keypoints = []
@@ -375,13 +375,13 @@ class MultiPersonONNXPoseEstimator:
 
                 for i, (img_idx, bbox_idx, bbox) in enumerate(img_bbox_mapping):
                     single_outputs = [output[i:i + 1] for output in mega_batch_outputs]
-                    keypoints, scores = self.pose_estimator.postprocess(
+                    keypoints, scores = await self.pose_estimator.postprocess(
                         single_outputs,
                         self.pose_estimator.model_input_size,
                         all_centers[i],
                         all_scales[i]
                     )
-                    keypoints = self._transform_keypoints_to_original(keypoints, bbox)
+                    keypoints = await self._transform_keypoints_to_original(keypoints, bbox)
                     all_keypoints.append(keypoints)
                     all_scores.append(scores)
 
@@ -433,7 +433,7 @@ class MultiPersonONNXPoseEstimator:
 
         return results
 
-    def _batch_detect_humans(self, imgs: List[np.ndarray]) -> List[
+    async def _batch_detect_humans(self, imgs: List[np.ndarray]) -> List[
         Tuple[np.ndarray, List[np.ndarray], List[np.ndarray]]]:
         """批量检测人体"""
         results = []

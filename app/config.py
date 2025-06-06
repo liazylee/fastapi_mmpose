@@ -45,7 +45,7 @@ class BatchProcessingConfig:
     # Batch settings - optimized for real-time video streaming
     batch_size: int = 16  # Reduced from 32 to 8 for faster batch formation in real-time streams
     max_queue_size: int = 50
-    batch_timeout_ms: int = 500  # Reduced from 100ms to 50ms for lower latency
+    batch_timeout_ms: int = 10  # Reduced from 100ms to 50ms for lower latency
 
     # Threading settings
     num_workers: int = os.cpu_count() or 4
@@ -56,7 +56,7 @@ class BatchProcessingConfig:
     input_resolution: tuple = (1920, 1080)
     detection_batch_size: int = 4
     pose_batch_size: int = 10
-    det_score_thr: float = 0.4
+    det_score_thr: float = 0.6
     pose_score_thr: float = 0.5
     max_track_age: int = 60
     iou_threshold: float = 0.5
@@ -68,7 +68,7 @@ class BatchProcessingConfig:
     yolo_conf_threshold: float = 0.5
     yolo_device: str = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     yolo_iou_threshold: float = 0.7
-    yolo_max_det: int = 300
+    yolo_max_det: int = 20
     yolo_classes: list = field(default_factory=lambda: [0])  # Only detect persons
 
     # YOLO Tracking settings
