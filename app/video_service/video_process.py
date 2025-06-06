@@ -50,7 +50,6 @@ class AsyncVideoTransformTrack(VideoStreamTrack):
 
     async def recv(self):
         """Non-blocking recv() - ends when track ends"""
-        """优化的 recv 方法 - 减少跳帧和卡顿"""
         if self._track_ended:
             raise Exception("Video track has ended")
 
@@ -63,8 +62,10 @@ class AsyncVideoTransformTrack(VideoStreamTrack):
         # Add to processing pipeline
         if self.processing_enabled:
             self.processor.add_frame(input_image)
-
-        # 异步获取输出帧，带等待
+        if self.frame_count < self.config.batch_size:  # 前几帧用于预热
+            self.frame_count += 1
+            return source_frame
+            # 异步获取输出帧，带等待
         output_frame, should_output = await self.processor.get_output_frame_async(timeout_ms=50)
 
         if should_output and output_frame is not None:

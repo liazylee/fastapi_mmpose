@@ -21,7 +21,8 @@ from app.video_service.video_process import (
 # Create the API router
 router = APIRouter()
 relay = MediaRelay()
-
+KAFKA_BOOTSTRAP_SERVERS = 'kafka:9092'
+KAFKA_TOPIC = 'video_raw_frames'
 # Track active connections and video tracks
 active_connections: Dict[str, RTCPeerConnection] = {}
 active_video_tracks: Dict[str, VideoTransformTrack] = {}

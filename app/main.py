@@ -1,14 +1,17 @@
 import asyncio
 import logging
+import os
+import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import settings
+from app.kafaka_producer import kafka_frame_producer
 from app.routers import webrtc
 
 # Configure logging
@@ -62,24 +65,13 @@ app.include_router(webrtc.router, prefix="/webrtc", tags=["WebRTC"])
 
 # File management endpoints
 @app.post("/upload")
-async def upload_file(request: Request):
+async def upload_file(file: UploadFile = File(...), bg_tasks: BackgroundTasks = None):
     """Upload video file for processing"""
-    form = await request.form()
-    file = form.get("file")
-
-    if not file:
-        return JSONResponse(status_code=400, content={"detail": "No file uploaded"})
-
-    if not file.filename.endswith(('.mp4', '.webm', '.ogg', '.mov', '.avi')):
-        return JSONResponse(status_code=400, content={"detail": "Unsupported file type"})
-
-    file_location = UPLOAD_DIR / file.filename
-    with open(file_location, "wb") as f:
-        content = await file.read()
-        f.write(content)
-
-    logger.info(f"File uploaded successfully: {file_location}")
-    return {"filename": file.filename, "location": str(file_location)}
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    bg_tasks.add_task(kafka_frame_producer, file_path)
+    return {"filename": file.filename, "detail": "File uploaded and processing started"}
 
 
 @app.get("/uploads")
@@ -164,74 +156,6 @@ async def health_check():
 
 
 # API documentation endpoints
-@app.get("/api/info")
-async def api_info():
-    """Get API information and available endpoints"""
-    return {
-        "application": settings.APP_NAME,
-        "version": "2.0.0",
-        "description": "Real-time pose estimation with WebRTC streaming",
-        "endpoints": {
-            "webrtc": {
-                "base": "/webrtc",
-                "offer": "/webrtc/offer",
-                "tracking_status": "/webrtc/tracking/status",
-                "tracking_enable": "/webrtc/tracking/enable",
-                "tracking_disable": "/webrtc/tracking/disable",
-                "tracking_reset": "/webrtc/tracking/reset",
-                "stats_connections": "/webrtc/stats/connections",
-                "stats_system": "/webrtc/stats/system",
-                "cleanup": "/webrtc/cleanup",
-                "health": "/webrtc/health"
-            },
-            "media": {
-                "uploads_list": "/webrtc/media/uploads",
-                "test_streams": "/webrtc/media/stream/test"
-            },
-            "files": {
-                "upload": "/upload",
-                "list": "/uploads",
-                "delete": "/uploads/{filename}"
-            },
-            "system": {
-                "health": "/health",
-                "info": "/api/info"
-            }
-        },
-        "modes": {
-            "camera": {
-                "description": "Real-time camera feed processing",
-                "parameters": {"mode": "camera"},
-                "example": '{"sdp": "...", "type": "offer", "mode": "camera"}'
-            },
-            "upload": {
-                "description": "Process uploaded video files",
-                "parameters": {"mode": "upload", "fileName": "video.mp4", "loop": "false"},
-                "example": '{"sdp": "...", "type": "offer", "mode": "upload", "fileName": "sample.mp4", "loop": true}',
-                "note": "Set loop=true for continuous playback, loop=false (default) for single playback"
-            },
-            "stream": {
-                "description": "Process live stream URLs (RTSP, HTTP, etc.)",
-                "parameters": {"mode": "stream", "streamUrl": "rtsp://..."},
-                "example": '{"sdp": "...", "type": "offer", "mode": "stream", "streamUrl": "https://example.com/stream.m3u8"}'
-            }
-        },
-        "architecture": {
-            "type": "Async streaming pipeline",
-            "components": [
-                "FrameCollector - Non-blocking frame buffering",
-                "BatchProcessor - Async batch inference",
-                "ResultManager - Output frame management",
-                "StreamOutputController - Timed frame delivery"
-            ],
-            "benefits": [
-                "Non-blocking recv() operation",
-                "Optimized batch processing",
-                "Controlled output timing",
-                "Better GPU utilization"
-            ]
-        }
-    }
 
 
 if __name__ == "__main__":
